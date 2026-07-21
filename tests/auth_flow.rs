@@ -1,0 +1,297 @@
+use std::{net::SocketAddr, path::Path};
+
+use axum::{
+    body::Body,
+    extract::ConnectInfo,
+    http::{Request, StatusCode, header},
+};
+use demo0::{
+    app, auth,
+    config::Config,
+    db,
+    error::AppError,
+    model::{Role, User},
+};
+use http_body_util::BodyExt;
+use tempfile::TempDir;
+use tower::ServiceExt;
+
+#[tokio::test]
+async fn public_registration_creates_an_ordinary_user() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("test.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let config = Config {
+        host: "127.0.0.1".to_owned(),
+        port: 6324,
+        database_url,
+        avatar_dir: temporary.path().join("avatars"),
+        cookie_secure: false,
+    };
+    let router = app::build(pool.clone(), config);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/register")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    let html = String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    let csrf = between(&html, "name=\"csrf_token\" value=\"", "\"");
+    let mismatched_body = format!(
+        "csrf_token={csrf}&username=alice_1&nickname=Alice&password=correct+horse+battery&password_confirmation=different+secure+password"
+    );
+    let mismatched_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/register")
+                .header(header::COOKIE, cookie.clone())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(mismatched_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mismatched_response.status(), StatusCode::BAD_REQUEST);
+    let user_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(user_count, 0);
+
+    let body = format!(
+        "csrf_token={csrf}&username=alice_1&nickname=Alice&password=correct+horse+battery&password_confirmation=correct+horse+battery"
+    );
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/register")
+                .header(header::COOKIE, cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .extension(ConnectInfo(
+                    "127.0.0.1:43100".parse::<SocketAddr>().unwrap(),
+                ))
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username_key = ?")
+        .bind("alice_1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(user.role, "user");
+    assert!(user.avatar_storage_name.is_none());
+
+    let duplicate_username = auth::create_user(
+        &pool,
+        "ALICE_1",
+        "Another Name",
+        "another secure password",
+        Role::User,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(duplicate_username, AppError::BadRequest(_)));
+    let duplicate_nickname = auth::create_user(
+        &pool,
+        "another_user",
+        "ＡＬＩＣＥ",
+        "another secure password",
+        Role::User,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(duplicate_nickname, AppError::BadRequest(_)));
+}
+
+#[tokio::test]
+async fn super_admin_can_promote_an_ordinary_user() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("roles.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let super_admin = auth::create_user(
+        &pool,
+        "root_user",
+        "站长",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let target = auth::create_user(
+        &pool,
+        "target_user",
+        "目标用户",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let config = Config {
+        host: "127.0.0.1".to_owned(),
+        port: 6324,
+        database_url,
+        avatar_dir: temporary.path().join("avatars"),
+        cookie_secure: false,
+    };
+    let router = app::build(pool.clone(), config);
+    let (anonymous_cookie, login_csrf) = page_session(&router, "/login").await;
+    let login_body = format!(
+        "csrf_token={login_csrf}&username={}&password=correct+horse+battery",
+        super_admin.username
+    );
+    let login_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header(header::COOKIE, anonymous_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .extension(ConnectInfo(
+                    "127.0.0.1:43101".parse::<SocketAddr>().unwrap(),
+                ))
+                .body(Body::from(login_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login_response.status(), StatusCode::SEE_OTHER);
+    let authenticated_cookie = response_cookie(&login_response);
+    let (same_cookie, admin_csrf) =
+        page_session_with_cookie(&router, "/admin/users", &authenticated_cookie).await;
+    assert_eq!(same_cookie, authenticated_cookie);
+
+    let role_body = format!("csrf_token={admin_csrf}&role=admin");
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/users/{}/role", target.id))
+                .header(header::COOKIE, authenticated_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(role_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let role = sqlx::query_scalar::<_, String>("SELECT role FROM users WHERE id = ?")
+        .bind(&target.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(role, "admin");
+    let audit_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM role_audit_logs WHERE actor_user_id = ? AND target_user_id = ?",
+    )
+    .bind(super_admin.id)
+    .bind(target.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 1);
+}
+
+fn sqlite_url(path: &Path) -> String {
+    format!("sqlite://{}?mode=rwc", path.display())
+}
+
+fn between<'a>(input: &'a str, prefix: &str, suffix: &str) -> &'a str {
+    let remainder = input.split_once(prefix).unwrap().1;
+    remainder.split_once(suffix).unwrap().0
+}
+
+async fn page_session(router: &axum::Router, uri: &str) -> (String, String) {
+    let response = router
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let cookie = response_cookie(&response);
+    let html = response_html(response).await;
+    let csrf = between(&html, "name=\"csrf_token\" value=\"", "\"").to_owned();
+    (cookie, csrf)
+}
+
+async fn page_session_with_cookie(
+    router: &axum::Router,
+    uri: &str,
+    cookie: &str,
+) -> (String, String) {
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = response_html(response).await;
+    let csrf = between(&html, "name=\"csrf_token\" value=\"", "\"").to_owned();
+    (cookie.to_owned(), csrf)
+}
+
+fn response_cookie(response: &axum::response::Response) -> String {
+    response
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+async fn response_html(response: axum::response::Response) -> String {
+    String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap()
+}

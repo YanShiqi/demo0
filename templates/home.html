@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}牢笼{% endblock %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">RUST · WSL · LEARNING</p>
+  <h1>收容 控制 保护</h1>
+  <p>这里将逐步加入随笔、图片和有趣的小功能。第一步，先把账号和个人资料做好。</p>
+  {% if ctx.authenticated %}
+    <a class="button" href="/profile">查看个人资料</a>
+  {% else %}
+    <div class="actions"><a class="button" href="/register">创建账号</a><a class="button secondary" href="/login">已有账号</a></div>
+  {% endif %}
+</section>
+<section class="feature-grid">
+  <article><span>01</span><h2>简单</h2><p>服务端渲染，不引入不必要的前端复杂度。</p></article>
+  <article><span>02</span><h2>安全</h2><p>密码散列、服务端会话和严格的头像校验。</p></article>
+  <article><span>03</span><h2>可成长</h2><p>从账号系统开始，逐步加入真正想做的内容。</p></article>
+</section>
+{% endblock %}

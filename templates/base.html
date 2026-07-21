@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}牢笼{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">牢笼</a>
+    <nav aria-label="主导航">
+      {% if ctx.authenticated %}
+        <a href="/profile">{{ ctx.nickname }}</a>
+        {% if ctx.is_super_admin %}<a href="/admin/users">用户管理</a>{% endif %}
+        <form action="/logout" method="post" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+          <button class="link-button" type="submit">退出</button>
+        </form>
+      {% else %}
+        <a href="/login">登录</a>
+        <a href="/register">注册</a>
+      {% endif %}
+    </nav>
+  </header>
+  <main class="page-shell">{% block content %}{% endblock %}</main>
+  <footer>一个用 Rust 慢慢搭起来的休闲角落</footer>
+</body>
+</html>

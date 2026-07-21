@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}注册 · 牢笼{% endblock %}
+{% block content %}
+<section class="form-card">
+  <p class="eyebrow">JOIN US</p><h1>创建账号</h1>
+  <p class="muted">注册后会自动获得默认头像和普通用户身份。</p>
+  {% if has_error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+  <form action="/register" method="post">
+    <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+    <label>用户名<input name="username" value="{{ username }}" minlength="3" maxlength="32" pattern="[a-z0-9_]+" autocomplete="username" required><small>3～32 位小写字母、数字或下划线</small></label>
+    <label>昵称<input name="nickname" value="{{ nickname }}" autocomplete="nickname" required><small>1～32 个字符，全站唯一；支持中文和 emoji，例如 🐷</small></label>
+    <label>密码<input type="password" name="password" minlength="12" maxlength="128" autocomplete="new-password" oncopy="return false" oncut="return false" required><small>12～128 个字符；密码栏禁止复制和剪切</small></label>
+    <label>确认密码<input type="password" name="password_confirmation" minlength="12" maxlength="128" autocomplete="new-password" oncopy="return false" oncut="return false" required><small>请再次输入相同密码</small></label>
+    <button class="button full" type="submit">注册并登录</button>
+  </form>
+</section>
+{% endblock %}

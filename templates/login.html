@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}登录 · 牢笼{% endblock %}
+{% block content %}
+<section class="form-card">
+  <p class="eyebrow">WELCOME BACK</p><h1>登录</h1>
+  {% if has_error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+  <form action="/login" method="post">
+    <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+    <label>用户名<input name="username" value="{{ username }}" autocomplete="username" required></label>
+    <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
+    <button class="button full" type="submit">登录</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}用户管理 · 牢笼{% endblock %}
+{% block content %}
+<section class="section-heading"><div><p class="eyebrow">SUPER ADMIN</p><h1>用户管理</h1></div><p>只有超级管理员可以授予或撤销管理员身份。</p></section>
+{% if has_message %}<div class="notice success" role="status">{{ message }}</div>{% endif %}
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>用户</th><th>用户名</th><th>身份</th><th>操作</th></tr></thead>
+    <tbody>
+    {% for user in users %}
+      <tr>
+        <td><span class="user-cell"><img class="avatar" src="/users/{{ user.id }}/avatar" alt="">{{ user.nickname }}</span></td>
+        <td>@{{ user.username }}</td><td>{{ user.role_label }}</td>
+        <td>
+        {% if user.can_change %}
+          <form action="/admin/users/{{ user.id }}/role" method="post" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+            {% if user.is_admin %}<input type="hidden" name="role" value="user"><button class="small-button" type="submit">撤销管理员</button>
+            {% else %}<input type="hidden" name="role" value="admin"><button class="small-button" type="submit">设为管理员</button>{% endif %}
+          </form>
+        {% else %}<span class="muted">不可调整</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}个人资料 · 牢笼{% endblock %}
+{% block content %}
+<section class="profile-header">
+  <img class="avatar large" src="/users/{{ user_id }}/avatar" alt="{{ nickname }} 的头像">
+  <div><p class="eyebrow">PROFILE</p><h1>{{ nickname }}</h1><p class="muted">@{{ username }} · {{ role_label }}</p></div>
+</section>
+{% if has_error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+{% if has_success %}<div class="notice success" role="status">{{ success }}</div>{% endif %}
+<div class="settings-grid">
+  <section class="form-card compact">
+    <h2>修改昵称</h2>
+    <form action="/profile/nickname" method="post">
+      <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+      <label>新昵称<input name="nickname" value="{{ nickname }}" required><small>1～32 个字符，支持中文和 emoji</small></label>
+      <button class="button" type="submit">保存昵称</button>
+    </form>
+  </section>
+  <section class="form-card compact">
+    <h2>修改头像</h2>
+    <form action="/profile/avatar" method="post" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+      <label>头像文件<input type="file" name="avatar" accept="image/png,image/jpeg,image/gif" required><small>PNG、JPEG 或 GIF；小于 1 MiB、最大 3000×3000，推荐 500×500</small></label>
+      <button class="button" type="submit">上传头像</button>
+    </form>
+  </section>
+</div>
+{% endblock %}
