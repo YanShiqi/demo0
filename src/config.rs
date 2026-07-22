@@ -13,6 +13,7 @@ const DEFAULT_MESSAGE_RETENTION_DAYS: i64 = 5;
 const DEFAULT_MESSAGE_LIMIT_PER_USER: i64 = 5;
 const DEFAULT_MESSAGE_MAX_LENGTH: usize = 300;
 const DEFAULT_MESSAGE_PAGE_SIZE: i64 = 30;
+const DEFAULT_MESSAGE_HOME_PREVIEW_LIMIT: i64 = 5;
 const DEFAULT_MESSAGE_CLEANUP_INTERVAL_HOURS: u64 = 6;
 
 #[derive(Clone, Debug)]
@@ -31,6 +32,7 @@ pub struct MessageConfig {
     pub limit_per_user: i64,
     pub max_length: usize,
     pub page_size: i64,
+    pub home_preview_limit: i64,
     pub cleanup_interval_hours: u64,
 }
 
@@ -104,6 +106,9 @@ impl MessageConfig {
         let page_size = parse_optional_env("MESSAGE_PAGE_SIZE")?
             .or(file_config.page_size)
             .unwrap_or(DEFAULT_MESSAGE_PAGE_SIZE);
+        let home_preview_limit = parse_optional_env("MESSAGE_HOME_PREVIEW_LIMIT")?
+            .or(file_config.home_preview_limit)
+            .unwrap_or(DEFAULT_MESSAGE_HOME_PREVIEW_LIMIT);
         let cleanup_interval_hours = parse_optional_env("MESSAGE_CLEANUP_INTERVAL_HOURS")?
             .or(file_config.cleanup_interval_hours)
             .unwrap_or(DEFAULT_MESSAGE_CLEANUP_INTERVAL_HOURS);
@@ -112,6 +117,10 @@ impl MessageConfig {
         anyhow::ensure!(limit_per_user > 0, "MESSAGE_LIMIT_PER_USER 必须大于 0");
         anyhow::ensure!(max_length > 0, "MESSAGE_MAX_LENGTH 必须大于 0");
         anyhow::ensure!(page_size > 0, "MESSAGE_PAGE_SIZE 必须大于 0");
+        anyhow::ensure!(
+            home_preview_limit > 0,
+            "MESSAGE_HOME_PREVIEW_LIMIT 必须大于 0"
+        );
         anyhow::ensure!(
             cleanup_interval_hours > 0,
             "MESSAGE_CLEANUP_INTERVAL_HOURS 必须大于 0"
@@ -122,6 +131,7 @@ impl MessageConfig {
             limit_per_user,
             max_length,
             page_size,
+            home_preview_limit,
             cleanup_interval_hours,
         })
     }
@@ -175,6 +185,7 @@ struct MessageFileConfig {
     limit_per_user: Option<i64>,
     max_length: Option<usize>,
     page_size: Option<i64>,
+    home_preview_limit: Option<i64>,
     cleanup_interval_hours: Option<u64>,
 }
 

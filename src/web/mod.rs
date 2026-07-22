@@ -84,7 +84,26 @@ pub struct ProfileQuery {
 
 pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, AppError> {
     let (session, _, ctx) = page_context(&state, &headers).await?;
-    render(HomeTemplate { ctx }, StatusCode::OK, session.new_cookie)
+    let messages: Vec<MessageView> = public_messages::list_recent_limited(
+        &state.pool,
+        &state.config.messages,
+        state.config.messages.home_preview_limit,
+    )
+    .await?
+    .into_iter()
+    .map(home_message_view)
+    .collect();
+    let has_messages = !messages.is_empty();
+    render(
+        HomeTemplate {
+            ctx,
+            messages,
+            has_messages,
+            message_preview_limit: state.config.messages.home_preview_limit,
+        },
+        StatusCode::OK,
+        session.new_cookie,
+    )
 }
 
 pub async fn register_page(
@@ -721,6 +740,20 @@ fn message_view(message: PublicMessageRow, current_user: Option<&User>) -> Messa
         body: message.body,
         created_at: message.created_at,
         can_delete,
+    }
+}
+
+fn home_message_view(message: PublicMessageRow) -> MessageView {
+    let role = Role::from_str(&message.role).unwrap_or(Role::User);
+    MessageView {
+        id: message.id,
+        author_user_id: message.author_user_id,
+        username: message.username,
+        nickname: message.nickname,
+        role_label: role.label(),
+        body: message.body,
+        created_at: message.created_at,
+        can_delete: false,
     }
 }
 

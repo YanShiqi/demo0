@@ -6,6 +6,9 @@ use crate::model::PageContext;
 #[template(path = "home.html")]
 pub struct HomeTemplate {
     pub ctx: PageContext,
+    pub messages: Vec<MessageView>,
+    pub has_messages: bool,
+    pub message_preview_limit: i64,
 }
 
 #[derive(Template)]

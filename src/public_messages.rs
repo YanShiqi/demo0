@@ -43,12 +43,20 @@ pub async fn list_recent(
     pool: &SqlitePool,
     config: &MessageConfig,
 ) -> Result<Vec<PublicMessageRow>, AppError> {
+    list_recent_limited(pool, config, config.page_size).await
+}
+
+pub async fn list_recent_limited(
+    pool: &SqlitePool,
+    config: &MessageConfig,
+    limit: i64,
+) -> Result<Vec<PublicMessageRow>, AppError> {
     let cutoff_epoch = cutoff_epoch(config)?;
     Ok(sqlx::query_as::<_, PublicMessageRow>(
         "SELECT public_messages.id, public_messages.author_user_id, public_messages.body, public_messages.created_at, users.username, users.nickname, users.role FROM public_messages JOIN users ON users.id = public_messages.author_user_id WHERE public_messages.deleted_at IS NULL AND public_messages.created_at_epoch >= ? ORDER BY public_messages.created_at_epoch DESC, public_messages.id DESC LIMIT ?",
     )
     .bind(cutoff_epoch)
-    .bind(config.page_size)
+    .bind(limit)
     .fetch_all(pool)
     .await?)
 }

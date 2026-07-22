@@ -274,6 +274,7 @@ async fn users_can_share_and_manage_public_messages() {
     .unwrap();
     let mut config = test_config(&temporary, database_url);
     config.messages.limit_per_user = 1;
+    config.messages.home_preview_limit = 1;
     let router = app::build(pool.clone(), config);
     let (anonymous_cookie, login_csrf) = page_session(&router, "/login").await;
     let login_body = format!(
@@ -345,6 +346,22 @@ async fn users_can_share_and_manage_public_messages() {
     assert!(html.contains("大家好🐷"));
     assert!(html.contains("/u/message_user"));
 
+    let home_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .header(header::COOKIE, authenticated_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let home_html = response_html(home_response).await;
+    assert!(home_html.contains("公共留言板"));
+    assert!(home_html.contains("最多展示 1 条最近留言"));
+    assert!(home_html.contains("大家好🐷"));
+
     let message_id =
         sqlx::query_scalar::<_, String>("SELECT id FROM public_messages WHERE author_user_id = ?")
             .bind(&user.id)
@@ -391,6 +408,7 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             limit_per_user: 5,
             max_length: 300,
             page_size: 30,
+            home_preview_limit: 5,
             cleanup_interval_hours: 6,
         },
     }

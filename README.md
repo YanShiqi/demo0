@@ -26,6 +26,7 @@ retention_days = 5
 limit_per_user = 5
 max_length = 300
 page_size = 30
+home_preview_limit = 5
 cleanup_interval_hours = 6
 ```
 
