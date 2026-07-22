@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}{{ nickname }} · 牢笼{% endblock %}
+{% block content %}
+<section class="public-profile">
+  <div class="profile-header">
+    <img class="avatar large" src="/users/{{ user_id }}/avatar" alt="{{ nickname }} 的头像">
+    <div>
+      <p class="eyebrow">USER PAGE</p>
+      <h1>{{ nickname }}</h1>
+      <p class="muted">@{{ username }} · {{ role_label }}</p>
+    </div>
+  </div>
+  <div class="profile-panel">
+    <h2>个人简介</h2>
+    {% if has_bio %}
+      <p class="bio-text">{{ bio }}</p>
+    {% else %}
+      <p class="muted">这个人还没有写简介。</p>
+    {% endif %}
+  </div>
+  <div class="profile-meta">
+    <span>加入时间</span>
+    <strong>{{ created_at }}</strong>
+  </div>
+</section>
+{% endblock %}

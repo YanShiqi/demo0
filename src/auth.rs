@@ -25,6 +25,7 @@ use crate::{
 const SESSION_COOKIE: &str = "demo0_session";
 const SESSION_DAYS: i64 = 7;
 const NICKNAME_LENGTH: std::ops::RangeInclusive<usize> = 1..=32;
+const BIO_MAX_LENGTH: usize = 160;
 
 #[derive(Debug)]
 pub struct ValidatedRegistration {
@@ -79,6 +80,21 @@ pub fn validate_nickname(nickname: &str) -> Result<(String, String), AppError> {
     }
     let key = nickname.to_lowercase().nfkc().collect();
     Ok((nickname, key))
+}
+
+pub fn validate_bio(bio: &str) -> Result<String, AppError> {
+    let bio = bio.trim().replace("\r\n", "\n").replace('\r', "\n");
+    // 简介允许换行和 emoji，但仍按用户看到的字符簇限制长度。
+    if bio.graphemes(true).count() > BIO_MAX_LENGTH
+        || bio
+            .chars()
+            .any(|character| character.is_control() && character != '\n' && character != '\t')
+    {
+        return Err(AppError::BadRequest(
+            "个人简介须为 160 个字符以内，且不能包含特殊控制字符".to_owned(),
+        ));
+    }
+    Ok(bio)
 }
 
 pub fn validate_password_confirmation(
@@ -444,6 +460,12 @@ mod tests {
     fn rejects_short_passwords() {
         let error = validate_registration("alice", "小艾", "too-short").unwrap_err();
         assert!(error.to_string().contains("12～128"));
+    }
+
+    #[test]
+    fn accepts_multiline_emoji_bio() {
+        let bio = validate_bio("  喜欢 Rust\n也喜欢 🐷  ").unwrap();
+        assert_eq!(bio, "喜欢 Rust\n也喜欢 🐷");
     }
 
     #[test]

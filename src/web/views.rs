@@ -35,10 +35,24 @@ pub struct ProfileTemplate {
     pub username: String,
     pub nickname: String,
     pub role_label: &'static str,
+    pub bio: String,
     pub has_error: bool,
     pub error: String,
     pub has_success: bool,
     pub success: String,
+}
+
+#[derive(Template)]
+#[template(path = "public_profile.html")]
+pub struct PublicProfileTemplate {
+    pub ctx: PageContext,
+    pub user_id: String,
+    pub username: String,
+    pub nickname: String,
+    pub role_label: &'static str,
+    pub bio: String,
+    pub has_bio: bool,
+    pub created_at: String,
 }
 
 #[derive(Clone, Debug)]

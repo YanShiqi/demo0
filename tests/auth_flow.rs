@@ -91,6 +91,7 @@ async fn public_registration_creates_an_ordinary_user() {
     );
 
     let response = router
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -106,6 +107,7 @@ async fn public_registration_creates_an_ordinary_user() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let authenticated_cookie = response_cookie(&response);
 
     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username_key = ?")
         .bind("alice_1")
@@ -114,6 +116,46 @@ async fn public_registration_creates_an_ordinary_user() {
         .unwrap();
     assert_eq!(user.role, "user");
     assert!(user.avatar_storage_name.is_none());
+    assert_eq!(user.bio, "");
+
+    let (_, profile_csrf) =
+        page_session_with_cookie(&router, "/profile", &authenticated_cookie).await;
+    let bio_body = format!("csrf_token={profile_csrf}&bio=Rust+learner%0AEnjoys+quiet+websites");
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/profile/bio")
+                .header(header::COOKIE, authenticated_cookie.clone())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(bio_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let bio = sqlx::query_scalar::<_, String>("SELECT bio FROM users WHERE username_key = ?")
+        .bind("alice_1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(bio, "Rust learner\nEnjoys quiet websites");
+
+    let public_response = router
+        .oneshot(
+            Request::builder()
+                .uri("/u/alice_1")
+                .header(header::COOKIE, authenticated_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(public_response.status(), StatusCode::OK);
+    let public_html = response_html(public_response).await;
+    assert!(public_html.contains("@alice_1"));
+    assert!(public_html.contains("Rust learner"));
 
     let duplicate_username = auth::create_user(
         &pool,

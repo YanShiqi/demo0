@@ -220,7 +220,8 @@ label {
     font-weight: 700;
 }
 
-input {
+input,
+textarea {
     width: 100%;
     padding: 12px 14px;
     color: var(--ink);
@@ -228,6 +229,12 @@ input {
     background: #0b1513;
     border: 1px solid var(--line);
     border-radius: 12px;
+}
+
+textarea {
+    min-height: 132px;
+    line-height: 1.6;
+    resize: vertical;
 }
 
 input::file-selector-button {
@@ -240,7 +247,8 @@ input::file-selector-button {
     border-radius: 8px;
 }
 
-input:focus {
+input:focus,
+textarea:focus {
     outline: 3px solid rgba(98, 199, 182, 0.15);
     border-color: var(--teal);
 }
@@ -312,6 +320,44 @@ small {
 .form-card.compact {
     max-width: none;
     margin: 0;
+}
+
+.form-card.wide {
+    grid-column: 1 / -1;
+}
+
+.public-profile {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.profile-panel,
+.profile-meta {
+    padding: 26px;
+    background: rgba(17, 28, 26, 0.78);
+    border: 1px solid rgba(98, 199, 182, 0.14);
+    border-radius: 24px;
+}
+
+.profile-panel h2 {
+    margin-top: 0;
+}
+
+.bio-text {
+    margin: 0;
+    line-height: 1.8;
+    white-space: pre-wrap;
+}
+
+.profile-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+    margin-top: 18px;
+}
+
+.profile-meta span {
+    color: var(--muted);
 }
 
 .section-heading {

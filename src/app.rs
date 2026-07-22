@@ -30,7 +30,9 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
             "/profile/nickname",
             axum::routing::post(web::update_nickname),
         )
+        .route("/profile/bio", axum::routing::post(web::update_bio))
         .route("/profile/avatar", axum::routing::post(web::update_avatar))
+        .route("/u/{username}", get(web::public_profile))
         .route("/users/{id}/avatar", get(web::user_avatar))
         .route("/admin/users", get(web::admin_users))
         .route(

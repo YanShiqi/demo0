@@ -22,7 +22,7 @@ use crate::{
 };
 use views::{
     AdminUserView, AdminUsersTemplate, HomeTemplate, LoginTemplate, ProfileTemplate,
-    RegisterTemplate,
+    PublicProfileTemplate, RegisterTemplate,
 };
 
 #[derive(Deserialize)]
@@ -50,6 +50,12 @@ pub struct CsrfForm {
 pub struct NicknameForm {
     csrf_token: String,
     nickname: String,
+}
+
+#[derive(Deserialize)]
+pub struct BioForm {
+    csrf_token: String,
+    bio: String,
 }
 
 #[derive(Deserialize)]
@@ -222,6 +228,7 @@ pub async fn profile_page(
     let user = require_user(&state, &session).await?;
     let success = match query.updated.as_deref() {
         Some("nickname") => "昵称已更新",
+        Some("bio") => "个人简介已更新",
         Some("avatar") => "头像已更新",
         _ => "",
     };
@@ -276,6 +283,31 @@ pub async fn update_nickname(
         return Err(error.into());
     }
     redirect("/profile?updated=nickname", None)
+}
+
+pub async fn update_bio(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<BioForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    let user = require_user(&state, &session).await?;
+    let bio = match auth::validate_bio(&form.bio) {
+        Ok(value) => value,
+        Err(AppError::BadRequest(message)) => {
+            return render_profile(&session, &user, Some(&message), None);
+        }
+        Err(error) => return Err(error),
+    };
+
+    sqlx::query("UPDATE users SET bio = ?, updated_at = ? WHERE id = ?")
+        .bind(bio)
+        .bind(auth::now_string()?)
+        .bind(&user.id)
+        .execute(&state.pool)
+        .await?;
+    redirect("/profile?updated=bio", None)
 }
 
 pub async fn update_avatar(
@@ -358,6 +390,35 @@ pub async fn update_avatar(
         "用户头像已更新"
     );
     redirect("/profile?updated=avatar", None)
+}
+
+pub async fn public_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(username): Path<String>,
+) -> Result<Response, AppError> {
+    let (session, _, ctx) = page_context(&state, &headers).await?;
+    let username_key = username.trim().to_lowercase();
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE username_key = ?")
+        .bind(username_key)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    render(
+        PublicProfileTemplate {
+            ctx,
+            user_id: user.id.clone(),
+            username: user.username.clone(),
+            nickname: user.nickname.clone(),
+            role_label: user.parsed_role().label(),
+            has_bio: !user.bio.is_empty(),
+            bio: user.bio,
+            created_at: user.created_at,
+        },
+        StatusCode::OK,
+        session.new_cookie,
+    )
 }
 
 pub async fn user_avatar(
@@ -520,6 +581,7 @@ fn render_profile(
             username: user.username.clone(),
             nickname: user.nickname.clone(),
             role_label: user.parsed_role().label(),
+            bio: user.bio.clone(),
             has_error: error.is_some(),
             error: error.unwrap_or_default().to_owned(),
             has_success: success.is_some(),
