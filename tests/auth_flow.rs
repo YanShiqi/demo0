@@ -7,7 +7,7 @@ use axum::{
 };
 use demo0::{
     app, auth,
-    config::{Config, MessageConfig},
+    config::{Config, DisplayConfig, MessageConfig},
     db,
     error::AppError,
     model::{Role, User},
@@ -368,6 +368,13 @@ async fn users_can_share_and_manage_public_messages() {
             .fetch_one(&pool)
             .await
             .unwrap();
+    let raw_created_at =
+        sqlx::query_scalar::<_, String>("SELECT created_at FROM public_messages WHERE id = ?")
+            .bind(&message_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!html.contains(&raw_created_at));
     let delete_body = format!("csrf_token={csrf}");
     let delete_response = router
         .oneshot(
@@ -403,6 +410,9 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
         database_url,
         avatar_dir: temporary.path().join("avatars"),
         cookie_secure: false,
+        display: DisplayConfig {
+            utc_offset_hours: 8,
+        },
         messages: MessageConfig {
             retention_days: 5,
             limit_per_user: 5,

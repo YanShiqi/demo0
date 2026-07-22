@@ -7,4 +7,5 @@ pub mod error;
 pub mod model;
 pub mod public_messages;
 pub mod rate_limit;
+pub mod time_display;
 pub mod web;

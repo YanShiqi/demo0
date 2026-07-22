@@ -9,6 +9,7 @@ const DEFAULT_PORT: u16 = 6324;
 const DEFAULT_DATABASE_URL: &str = "sqlite://data/app.db?mode=rwc";
 const DEFAULT_AVATAR_DIR: &str = "data/avatars";
 const DEFAULT_COOKIE_SECURE: bool = false;
+const DEFAULT_DISPLAY_UTC_OFFSET_HOURS: i8 = 8;
 const DEFAULT_MESSAGE_RETENTION_DAYS: i64 = 5;
 const DEFAULT_MESSAGE_LIMIT_PER_USER: i64 = 5;
 const DEFAULT_MESSAGE_MAX_LENGTH: usize = 300;
@@ -23,7 +24,13 @@ pub struct Config {
     pub database_url: String,
     pub avatar_dir: PathBuf,
     pub cookie_secure: bool,
+    pub display: DisplayConfig,
     pub messages: MessageConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct DisplayConfig {
+    pub utc_offset_hours: i8,
 }
 
 #[derive(Clone, Debug)]
@@ -72,6 +79,7 @@ impl Config {
                 .as_ref()
                 .and_then(|session| session.cookie_secure))
             .unwrap_or(DEFAULT_COOKIE_SECURE);
+        let display = DisplayConfig::from_sources(file_config.display)?;
         let messages = MessageConfig::from_sources(file_config.messages)?;
 
         Ok(Self {
@@ -80,6 +88,7 @@ impl Config {
             database_url,
             avatar_dir,
             cookie_secure,
+            display,
             messages,
         })
     }
@@ -88,6 +97,18 @@ impl Config {
         format!("{}:{}", self.host, self.port)
             .parse()
             .context("APP_HOST 或 APP_PORT 无效")
+    }
+}
+
+impl DisplayConfig {
+    fn from_sources(file_config: Option<DisplayFileConfig>) -> Result<Self> {
+        let file_config = file_config.unwrap_or_default();
+        let utc_offset_hours = parse_optional_env("DISPLAY_UTC_OFFSET_HOURS")?
+            .or(file_config.utc_offset_hours)
+            .unwrap_or(DEFAULT_DISPLAY_UTC_OFFSET_HOURS);
+        time::UtcOffset::from_hms(utc_offset_hours, 0, 0)
+            .context("DISPLAY_UTC_OFFSET_HOURS 必须是有效 UTC 小时偏移")?;
+        Ok(Self { utc_offset_hours })
     }
 }
 
@@ -143,6 +164,7 @@ struct FileConfig {
     database: Option<DatabaseFileConfig>,
     avatar: Option<AvatarFileConfig>,
     session: Option<SessionFileConfig>,
+    display: Option<DisplayFileConfig>,
     messages: Option<MessageFileConfig>,
 }
 
@@ -177,6 +199,11 @@ struct AvatarFileConfig {
 #[derive(Debug, Deserialize)]
 struct SessionFileConfig {
     cookie_secure: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DisplayFileConfig {
+    utc_offset_hours: Option<i8>,
 }
 
 #[derive(Debug, Default, Deserialize)]

@@ -20,6 +20,7 @@ use crate::{
     error::AppError,
     model::{PageContext, Role, SessionContext, SessionRow, User},
     public_messages::{self, PublicMessageRow},
+    time_display,
 };
 use views::{
     AdminUserView, AdminUsersTemplate, HomeTemplate, LoginTemplate, MessageView, MessagesTemplate,
@@ -91,7 +92,7 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> Result<R
     )
     .await?
     .into_iter()
-    .map(home_message_view)
+    .map(|message| home_message_view(message, state.config.display.utc_offset_hours))
     .collect();
     let has_messages = !messages.is_empty();
     render(
@@ -495,7 +496,10 @@ pub async fn public_profile(
             role_label: user.parsed_role().label(),
             has_bio: !user.bio.is_empty(),
             bio: user.bio,
-            created_at: user.created_at,
+            created_at: time_display::friendly_rfc3339(
+                &user.created_at,
+                state.config.display.utc_offset_hours,
+            ),
         },
         StatusCode::OK,
         session.new_cookie,
@@ -660,7 +664,7 @@ async fn render_profile(
         public_messages::list_by_author(&state.pool, &user.id, &state.config.messages)
             .await?
             .into_iter()
-            .map(|message| message_view(message, Some(user)))
+            .map(|message| message_view(message, Some(user), state.config.display.utc_offset_hours))
             .collect();
     let has_messages = !messages.is_empty();
     render(
@@ -700,7 +704,9 @@ async fn render_messages(
         public_messages::list_recent(&state.pool, &state.config.messages)
             .await?
             .into_iter()
-            .map(|message| message_view(message, current_user))
+            .map(|message| {
+                message_view(message, current_user, state.config.display.utc_offset_hours)
+            })
             .collect();
     let has_messages = !messages.is_empty();
     render(
@@ -725,7 +731,11 @@ async fn render_messages(
     )
 }
 
-fn message_view(message: PublicMessageRow, current_user: Option<&User>) -> MessageView {
+fn message_view(
+    message: PublicMessageRow,
+    current_user: Option<&User>,
+    utc_offset_hours: i8,
+) -> MessageView {
     let role = Role::from_str(&message.role).unwrap_or(Role::User);
     let can_delete = current_user.is_some_and(|user| {
         user.id == message.author_user_id
@@ -738,12 +748,12 @@ fn message_view(message: PublicMessageRow, current_user: Option<&User>) -> Messa
         nickname: message.nickname,
         role_label: role.label(),
         body: message.body,
-        created_at: message.created_at,
+        created_at: time_display::friendly_rfc3339(&message.created_at, utc_offset_hours),
         can_delete,
     }
 }
 
-fn home_message_view(message: PublicMessageRow) -> MessageView {
+fn home_message_view(message: PublicMessageRow, utc_offset_hours: i8) -> MessageView {
     let role = Role::from_str(&message.role).unwrap_or(Role::User);
     MessageView {
         id: message.id,
@@ -752,7 +762,7 @@ fn home_message_view(message: PublicMessageRow) -> MessageView {
         nickname: message.nickname,
         role_label: role.label(),
         body: message.body,
-        created_at: message.created_at,
+        created_at: time_display::friendly_rfc3339(&message.created_at, utc_offset_hours),
         can_delete: false,
     }
 }

@@ -21,6 +21,9 @@ cargo run
 常用结构化配置位于 `config/default.toml`。例如公共留言板配置：
 
 ```toml
+[display]
+utc_offset_hours = 8
+
 [messages]
 retention_days = 5
 limit_per_user = 5

@@ -1,20 +1,35 @@
 [server]
+# 网站监听地址；本机开发通常用 127.0.0.1，WSL 端口转发场景可改为 0.0.0.0。
 host = "127.0.0.1"
+# 网站监听端口；Windows 端口转发已使用 6324。
 port = 6324
 
 [database]
+# SQLite 数据库地址；mode=rwc 表示不存在时创建并允许读写。
 url = "sqlite://data/app.db?mode=rwc"
 
 [avatar]
+# 用户上传头像的存储目录；目录内容属于运行数据，不提交到 Git。
 dir = "data/avatars"
 
 [session]
+# HTTPS 部署时应设为 true，本地 HTTP 开发保持 false。
 cookie_secure = false
 
+[display]
+# 页面展示时间使用的 UTC 小时偏移；中国时间为 8。
+utc_offset_hours = 8
+
 [messages]
+# 公共留言保留天数；展示、发言限制和自动清理都会使用这个窗口。
 retention_days = 5
+# 每个用户在保留窗口内最多可发布的留言数量。
 limit_per_user = 5
+# 单条留言最大可见字符数；支持中文、换行和 emoji。
 max_length = 300
+# 公共留言板页面最多展示的留言数量。
 page_size = 30
+# 首页公共留言预览最多展示的留言数量。
 home_preview_limit = 5
+# 后台自动清理过期留言的间隔小时数。
 cleanup_interval_hours = 6
