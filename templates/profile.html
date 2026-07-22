@@ -37,5 +37,28 @@
       <button class="button" type="submit">保存简介</button>
     </form>
   </section>
+  <section class="form-card compact wide">
+    <h2>我的留言</h2>
+    <p class="muted">这里只显示最近 {{ retention_days }} 天内仍可见的留言。</p>
+    {% if has_messages %}
+      <div class="message-list compact-list">
+        {% for message in messages %}
+        <article class="message-card">
+          <p class="message-body">{{ message.body }}</p>
+          <div class="message-footer">
+            <time>{{ message.created_at }}</time>
+            <form action="/messages/{{ message.id }}/delete" method="post" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+              <input type="hidden" name="return_to" value="/profile">
+              <button class="link-button danger-link" type="submit">删除</button>
+            </form>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">你最近还没有发布留言。</p>
+    {% endif %}
+  </section>
 </div>
 {% endblock %}

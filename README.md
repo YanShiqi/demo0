@@ -1,6 +1,6 @@
 # demo0
 
-一个用于学习 Rust Web 开发的休闲网站。第一版包含注册、登录、个人资料、PNG/JPEG/GIF 头像，以及超级管理员分配管理员身份。
+一个用于学习 Rust Web 开发的休闲网站。当前包含注册、登录、个人资料、公开主页、公共留言板、PNG/JPEG/GIF 头像，以及超级管理员分配管理员身份。
 
 ## 本地运行
 
@@ -8,7 +8,7 @@
 cargo run
 ```
 
-程序启动时会自动读取仓库根目录的 `.env`，系统环境变量可覆盖其中的值。当前 WSL 环境为配合 Windows `portproxy`，使用 `APP_HOST=0.0.0.0` 和端口 `6324`；Windows 浏览器仍访问 <http://127.0.0.1:6324>。
+程序启动时会先读取 `config/default.toml`，再读取仓库根目录的 `.env`，系统环境变量可覆盖其中的值。当前 WSL 环境为配合 Windows `portproxy`，使用 `APP_HOST=0.0.0.0` 和端口 `6324`；Windows 浏览器仍访问 <http://127.0.0.1:6324>。
 
 ```bash
 APP_HOST=127.0.0.1 \
@@ -17,6 +17,19 @@ DATABASE_URL='sqlite://data/app.db?mode=rwc' \
 AVATAR_DIR=data/avatars \
 cargo run
 ```
+
+常用结构化配置位于 `config/default.toml`。例如公共留言板配置：
+
+```toml
+[messages]
+retention_days = 5
+limit_per_user = 5
+max_length = 300
+page_size = 30
+cleanup_interval_hours = 6
+```
+
+留言板入口为 <http://127.0.0.1:6324/messages>。服务启动时会清理一次过期留言，运行中也会按配置周期自动清理。
 
 首次运行后，另开一个终端创建唯一的超级管理员：
 

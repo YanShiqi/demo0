@@ -19,10 +19,11 @@ use crate::{
     avatar::{self, DEFAULT_AVATAR},
     error::AppError,
     model::{PageContext, Role, SessionContext, SessionRow, User},
+    public_messages::{self, PublicMessageRow},
 };
 use views::{
-    AdminUserView, AdminUsersTemplate, HomeTemplate, LoginTemplate, ProfileTemplate,
-    PublicProfileTemplate, RegisterTemplate,
+    AdminUserView, AdminUsersTemplate, HomeTemplate, LoginTemplate, MessageView, MessagesTemplate,
+    ProfileTemplate, PublicProfileTemplate, RegisterTemplate,
 };
 
 #[derive(Deserialize)]
@@ -44,6 +45,18 @@ pub struct LoginForm {
 #[derive(Deserialize)]
 pub struct CsrfForm {
     csrf_token: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteMessageForm {
+    csrf_token: String,
+    return_to: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct MessageForm {
+    csrf_token: String,
+    body: String,
 }
 
 #[derive(Deserialize)]
@@ -219,6 +232,53 @@ pub async fn logout(
     redirect("/", Some(auth::expired_session_cookie(&state.config)))
 }
 
+pub async fn messages_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let (session, user, ctx) = page_context(&state, &headers).await?;
+    render_messages(
+        &state,
+        session.new_cookie,
+        ctx,
+        user.as_ref(),
+        None,
+        String::new(),
+    )
+    .await
+}
+
+pub async fn create_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<MessageForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    let user = require_user(&state, &session).await?;
+    match public_messages::create(&state.pool, &user.id, &form.body, &state.config.messages).await {
+        Ok(()) => redirect("/messages", None),
+        Err(AppError::BadRequest(message)) => {
+            let ctx = PageContext::authenticated(session.csrf_token.clone(), &user);
+            render_messages(&state, None, ctx, Some(&user), Some(&message), form.body).await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub async fn delete_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(message_id): Path<String>,
+    Form(form): Form<DeleteMessageForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    let user = require_user(&state, &session).await?;
+    public_messages::mark_deleted(&state.pool, &message_id, &user.id, user.parsed_role()).await?;
+    redirect(delete_return_to(form.return_to.as_deref()), None)
+}
+
 pub async fn profile_page(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -233,11 +293,13 @@ pub async fn profile_page(
         _ => "",
     };
     render_profile(
+        &state,
         &session,
         &user,
         None,
         (!success.is_empty()).then_some(success),
     )
+    .await
 }
 
 pub async fn update_nickname(
@@ -251,7 +313,7 @@ pub async fn update_nickname(
     let (nickname, nickname_key) = match auth::validate_nickname(&form.nickname) {
         Ok(value) => value,
         Err(AppError::BadRequest(message)) => {
-            return render_profile(&session, &user, Some(&message), None);
+            return render_profile(&state, &session, &user, Some(&message), None).await;
         }
         Err(error) => return Err(error),
     };
@@ -265,7 +327,7 @@ pub async fn update_nickname(
     .await?
         > 0;
     if duplicate {
-        return render_profile(&session, &user, Some("昵称已被使用"), None);
+        return render_profile(&state, &session, &user, Some("昵称已被使用"), None).await;
     }
 
     let result =
@@ -278,7 +340,7 @@ pub async fn update_nickname(
             .await;
     if let Err(error) = result {
         if is_unique_violation(&error) {
-            return render_profile(&session, &user, Some("昵称已被使用"), None);
+            return render_profile(&state, &session, &user, Some("昵称已被使用"), None).await;
         }
         return Err(error.into());
     }
@@ -296,7 +358,7 @@ pub async fn update_bio(
     let bio = match auth::validate_bio(&form.bio) {
         Ok(value) => value,
         Err(AppError::BadRequest(message)) => {
-            return render_profile(&session, &user, Some(&message), None);
+            return render_profile(&state, &session, &user, Some(&message), None).await;
         }
         Err(error) => return Err(error),
     };
@@ -568,12 +630,20 @@ async fn require_super_admin(state: &AppState, session: &SessionRow) -> Result<U
     Ok(user)
 }
 
-fn render_profile(
+async fn render_profile(
+    state: &AppState,
     session: &SessionRow,
     user: &User,
     error: Option<&str>,
     success: Option<&str>,
 ) -> Result<Response, AppError> {
+    let messages: Vec<MessageView> =
+        public_messages::list_by_author(&state.pool, &user.id, &state.config.messages)
+            .await?
+            .into_iter()
+            .map(|message| message_view(message, Some(user)))
+            .collect();
+    let has_messages = !messages.is_empty();
     render(
         ProfileTemplate {
             ctx: PageContext::authenticated(session.csrf_token.clone(), user),
@@ -586,6 +656,9 @@ fn render_profile(
             error: error.unwrap_or_default().to_owned(),
             has_success: success.is_some(),
             success: success.unwrap_or_default().to_owned(),
+            messages,
+            has_messages,
+            retention_days: state.config.messages.retention_days,
         },
         if error.is_some() {
             StatusCode::BAD_REQUEST
@@ -594,6 +667,68 @@ fn render_profile(
         },
         None,
     )
+}
+
+async fn render_messages(
+    state: &AppState,
+    cookie: Option<String>,
+    ctx: PageContext,
+    current_user: Option<&User>,
+    error: Option<&str>,
+    body: String,
+) -> Result<Response, AppError> {
+    let messages: Vec<MessageView> =
+        public_messages::list_recent(&state.pool, &state.config.messages)
+            .await?
+            .into_iter()
+            .map(|message| message_view(message, current_user))
+            .collect();
+    let has_messages = !messages.is_empty();
+    render(
+        MessagesTemplate {
+            ctx,
+            messages,
+            has_messages,
+            authenticated: current_user.is_some(),
+            has_error: error.is_some(),
+            error: error.unwrap_or_default().to_owned(),
+            body,
+            message_limit: state.config.messages.limit_per_user,
+            retention_days: state.config.messages.retention_days,
+            max_length: state.config.messages.max_length,
+        },
+        if error.is_some() {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::OK
+        },
+        cookie,
+    )
+}
+
+fn message_view(message: PublicMessageRow, current_user: Option<&User>) -> MessageView {
+    let role = Role::from_str(&message.role).unwrap_or(Role::User);
+    let can_delete = current_user.is_some_and(|user| {
+        user.id == message.author_user_id
+            || matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin)
+    });
+    MessageView {
+        id: message.id,
+        author_user_id: message.author_user_id,
+        username: message.username,
+        nickname: message.nickname,
+        role_label: role.label(),
+        body: message.body,
+        created_at: message.created_at,
+        can_delete,
+    }
+}
+
+fn delete_return_to(value: Option<&str>) -> &'static str {
+    match value {
+        Some("/profile") => "/profile",
+        _ => "/messages",
+    }
 }
 
 fn render<T: Template>(

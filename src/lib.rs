@@ -5,5 +5,6 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod model;
+pub mod public_messages;
 pub mod rate_limit;
 pub mod web;

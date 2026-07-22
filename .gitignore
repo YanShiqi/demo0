@@ -1,3 +1,5 @@
 /target
 /data
 /.env
+/local-notes
+/config/production.toml

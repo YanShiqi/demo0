@@ -25,6 +25,14 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         .route("/register", get(web::register_page).post(web::register))
         .route("/login", get(web::login_page).post(web::login))
         .route("/logout", axum::routing::post(web::logout))
+        .route(
+            "/messages",
+            get(web::messages_page).post(web::create_message),
+        )
+        .route(
+            "/messages/{id}/delete",
+            axum::routing::post(web::delete_message),
+        )
         .route("/profile", get(web::profile_page))
         .route(
             "/profile/nickname",

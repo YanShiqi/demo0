@@ -7,7 +7,7 @@ use axum::{
 };
 use demo0::{
     app, auth,
-    config::Config,
+    config::{Config, MessageConfig},
     db,
     error::AppError,
     model::{Role, User},
@@ -22,13 +22,7 @@ async fn public_registration_creates_an_ordinary_user() {
     let database_path = temporary.path().join("test.db");
     let database_url = sqlite_url(&database_path);
     let pool = db::connect(&database_url).await.unwrap();
-    let config = Config {
-        host: "127.0.0.1".to_owned(),
-        port: 6324,
-        database_url,
-        avatar_dir: temporary.path().join("avatars"),
-        cookie_secure: false,
-    };
+    let config = test_config(&temporary, database_url);
     let router = app::build(pool.clone(), config);
 
     let response = router
@@ -203,13 +197,7 @@ async fn super_admin_can_promote_an_ordinary_user() {
     )
     .await
     .unwrap();
-    let config = Config {
-        host: "127.0.0.1".to_owned(),
-        port: 6324,
-        database_url,
-        avatar_dir: temporary.path().join("avatars"),
-        cookie_secure: false,
-    };
+    let config = test_config(&temporary, database_url);
     let router = app::build(pool.clone(), config);
     let (anonymous_cookie, login_csrf) = page_session(&router, "/login").await;
     let login_body = format!(
@@ -269,8 +257,143 @@ async fn super_admin_can_promote_an_ordinary_user() {
     assert_eq!(audit_count, 1);
 }
 
+#[tokio::test]
+async fn users_can_share_and_manage_public_messages() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("messages.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let user = auth::create_user(
+        &pool,
+        "message_user",
+        "留言用户",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let mut config = test_config(&temporary, database_url);
+    config.messages.limit_per_user = 1;
+    let router = app::build(pool.clone(), config);
+    let (anonymous_cookie, login_csrf) = page_session(&router, "/login").await;
+    let login_body = format!(
+        "csrf_token={login_csrf}&username={}&password=correct+horse+battery",
+        user.username
+    );
+    let login_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header(header::COOKIE, anonymous_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .extension(ConnectInfo(
+                    "127.0.0.1:43102".parse::<SocketAddr>().unwrap(),
+                ))
+                .body(Body::from(login_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let authenticated_cookie = response_cookie(&login_response);
+    let (_, csrf) = page_session_with_cookie(&router, "/messages", &authenticated_cookie).await;
+    let message_body = format!("csrf_token={csrf}&body=大家好%F0%9F%90%B7");
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/messages")
+                .header(header::COOKIE, authenticated_cookie.clone())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(message_body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let limited_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/messages")
+                .header(header::COOKIE, authenticated_cookie.clone())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(message_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(limited_response.status(), StatusCode::BAD_REQUEST);
+
+    let messages_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/messages")
+                .header(header::COOKIE, authenticated_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let html = response_html(messages_response).await;
+    assert!(html.contains("大家好🐷"));
+    assert!(html.contains("/u/message_user"));
+
+    let message_id =
+        sqlx::query_scalar::<_, String>("SELECT id FROM public_messages WHERE author_user_id = ?")
+            .bind(&user.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let delete_body = format!("csrf_token={csrf}");
+    let delete_response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/messages/{message_id}/delete"))
+                .header(header::COOKIE, authenticated_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(delete_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::SEE_OTHER);
+    let deleted_at = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT deleted_at FROM public_messages WHERE id = ?",
+    )
+    .bind(message_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(deleted_at.is_some());
+}
+
 fn sqlite_url(path: &Path) -> String {
     format!("sqlite://{}?mode=rwc", path.display())
+}
+
+fn test_config(temporary: &TempDir, database_url: String) -> Config {
+    Config {
+        host: "127.0.0.1".to_owned(),
+        port: 6324,
+        database_url,
+        avatar_dir: temporary.path().join("avatars"),
+        cookie_secure: false,
+        messages: MessageConfig {
+            retention_days: 5,
+            limit_per_user: 5,
+            max_length: 300,
+            page_size: 30,
+            cleanup_interval_hours: 6,
+        },
+    }
 }
 
 fn between<'a>(input: &'a str, prefix: &str, suffix: &str) -> &'a str {

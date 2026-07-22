@@ -1,5 +1,5 @@
 use anyhow::Context;
-use demo0::{app, config::Config, db};
+use demo0::{app, config::Config, db, public_messages};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -17,6 +17,12 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("创建头像目录失败")?;
     let pool = db::connect(&config.database_url).await?;
+    let removed_messages = public_messages::cleanup_expired(&pool, &config.messages).await?;
+    if removed_messages > 0 {
+        info!(removed_messages, "启动时已清理过期公共留言");
+    }
+    let _message_cleanup_task =
+        public_messages::spawn_cleanup_task(pool.clone(), config.messages.clone());
     let app = app::build(pool, config.clone());
     let address = config.socket_address()?;
     let listener = tokio::net::TcpListener::bind(address)

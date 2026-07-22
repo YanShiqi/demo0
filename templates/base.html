@@ -10,6 +10,7 @@
   <header class="site-header">
     <a class="brand" href="/">牢笼</a>
     <nav aria-label="主导航">
+      <a href="/messages">留言板</a>
       {% if ctx.authenticated %}
         <a href="/profile">{{ ctx.nickname }}</a>
         {% if ctx.is_super_admin %}<a href="/admin/users">用户管理</a>{% endif %}

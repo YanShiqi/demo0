@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}公共留言板 · 牢笼{% endblock %}
+{% block content %}
+<section class="section-heading">
+  <div><p class="eyebrow">PUBLIC BOARD</p><h1>公共留言板</h1></div>
+  <p>只展示最近 {{ retention_days }} 天内的留言，每人最多 {{ message_limit }} 条。</p>
+</section>
+
+{% if has_error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+
+{% if authenticated %}
+<section class="form-card message-composer">
+  <h2>写留言</h2>
+  <form action="/messages" method="post">
+    <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+    <label>内容<textarea name="body" rows="4" placeholder="说点什么，让大家发现你">{{ body }}</textarea><small>{{ max_length }} 个字符以内，支持换行和 emoji</small></label>
+    <button class="button" type="submit">发布留言</button>
+  </form>
+</section>
+{% else %}
+<div class="notice"><a href="/login">登录</a> 后可以发布留言。</div>
+{% endif %}
+
+<section class="message-list" aria-label="公共留言列表">
+  {% if has_messages %}
+    {% for message in messages %}
+    <article class="message-card">
+      <a class="message-author" href="/u/{{ message.username }}">
+        <img class="avatar" src="/users/{{ message.author_user_id }}/avatar" alt="{{ message.nickname }} 的头像">
+        <span><strong>{{ message.nickname }}</strong><small>@{{ message.username }} · {{ message.role_label }}</small></span>
+      </a>
+      <p class="message-body">{{ message.body }}</p>
+      <div class="message-footer">
+        <time>{{ message.created_at }}</time>
+        {% if message.can_delete %}
+        <form action="/messages/{{ message.id }}/delete" method="post" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+          <button class="link-button danger-link" type="submit">删除</button>
+        </form>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  {% else %}
+    <p class="empty-state">还没有留言，第一条就交给你了。</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,19 @@
+[server]
+host = "127.0.0.1"
+port = 6324
+
+[database]
+url = "sqlite://data/app.db?mode=rwc"
+
+[avatar]
+dir = "data/avatars"
+
+[session]
+cookie_secure = false
+
+[messages]
+retention_days = 5
+limit_per_user = 5
+max_length = 300
+page_size = 30
+cleanup_interval_hours = 6

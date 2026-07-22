@@ -27,6 +27,33 @@ pub struct LoginTemplate {
     pub username: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct MessageView {
+    pub id: String,
+    pub author_user_id: String,
+    pub username: String,
+    pub nickname: String,
+    pub role_label: &'static str,
+    pub body: String,
+    pub created_at: String,
+    pub can_delete: bool,
+}
+
+#[derive(Template)]
+#[template(path = "messages.html")]
+pub struct MessagesTemplate {
+    pub ctx: PageContext,
+    pub messages: Vec<MessageView>,
+    pub has_messages: bool,
+    pub authenticated: bool,
+    pub has_error: bool,
+    pub error: String,
+    pub body: String,
+    pub message_limit: i64,
+    pub retention_days: i64,
+    pub max_length: usize,
+}
+
 #[derive(Template)]
 #[template(path = "profile.html")]
 pub struct ProfileTemplate {
@@ -40,6 +67,9 @@ pub struct ProfileTemplate {
     pub error: String,
     pub has_success: bool,
     pub success: String,
+    pub messages: Vec<MessageView>,
+    pub has_messages: bool,
+    pub retention_days: i64,
 }
 
 #[derive(Template)]
