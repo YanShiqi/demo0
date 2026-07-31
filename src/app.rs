@@ -14,6 +14,7 @@ pub struct AppState {
 }
 
 pub fn build(pool: SqlitePool, config: Config) -> Router {
+    let body_limit = config.memes.max_upload_bytes.max(MAX_UPLOAD_BYTES) + 128 * 1024;
     let state = AppState {
         pool,
         config: Arc::new(config),
@@ -33,6 +34,18 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
             "/messages/{id}/delete",
             axum::routing::post(web::delete_message),
         )
+        .route("/memes", get(web::memes_page).post(web::create_meme))
+        .route("/memes/new", get(web::new_meme_page))
+        .route("/memes/{id}/image", get(web::meme_image))
+        .route("/admin/memes", get(web::admin_memes))
+        .route(
+            "/admin/memes/{id}/approve",
+            axum::routing::post(web::approve_meme),
+        )
+        .route(
+            "/admin/memes/{id}/delete",
+            axum::routing::post(web::delete_meme),
+        )
         .route("/profile", get(web::profile_page))
         .route(
             "/profile/nickname",
@@ -49,7 +62,7 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         )
         .route("/static/app.css", get(web::app_css))
         .fallback(web::not_found)
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 128 * 1024))
+        .layer(DefaultBodyLimit::max(body_limit))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

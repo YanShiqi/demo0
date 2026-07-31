@@ -9,6 +9,9 @@ pub struct HomeTemplate {
     pub messages: Vec<MessageView>,
     pub has_messages: bool,
     pub message_preview_limit: i64,
+    pub memes: Vec<MemeView>,
+    pub has_memes: bool,
+    pub meme_preview_limit: i64,
 }
 
 #[derive(Template)]
@@ -55,6 +58,53 @@ pub struct MessagesTemplate {
     pub message_limit: i64,
     pub retention_days: i64,
     pub max_length: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct MemeView {
+    pub id: String,
+    pub author_user_id: String,
+    pub username: String,
+    pub nickname: String,
+    pub title: String,
+    pub status_label: &'static str,
+    pub created_at: String,
+    pub tags: Vec<String>,
+    pub has_tags: bool,
+}
+
+#[derive(Template)]
+#[template(path = "memes.html")]
+pub struct MemesTemplate {
+    pub ctx: PageContext,
+    pub memes: Vec<MemeView>,
+    pub has_memes: bool,
+    pub tag: String,
+    pub has_tag: bool,
+    pub next_cursor: String,
+    pub has_next_cursor: bool,
+    pub page_size: i64,
+}
+
+#[derive(Template)]
+#[template(path = "meme_new.html")]
+pub struct NewMemeTemplate {
+    pub ctx: PageContext,
+    pub has_error: bool,
+    pub error: String,
+    pub title: String,
+    pub tags: String,
+    pub max_upload_kib: usize,
+    pub max_tags: usize,
+    pub max_title_length: usize,
+}
+
+#[derive(Template)]
+#[template(path = "admin_memes.html")]
+pub struct AdminMemesTemplate {
+    pub ctx: PageContext,
+    pub memes: Vec<MemeView>,
+    pub has_memes: bool,
 }
 
 #[derive(Template)]

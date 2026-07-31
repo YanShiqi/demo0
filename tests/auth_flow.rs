@@ -7,7 +7,7 @@ use axum::{
 };
 use demo0::{
     app, auth,
-    config::{Config, DisplayConfig, MessageConfig},
+    config::{Config, DisplayConfig, MemeConfig, MessageConfig},
     db,
     error::AppError,
     model::{Role, User},
@@ -399,6 +399,155 @@ async fn users_can_share_and_manage_public_messages() {
     assert!(deleted_at.is_some());
 }
 
+#[tokio::test]
+async fn memes_require_review_before_public_listing() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("memes.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let user = auth::create_user(
+        &pool,
+        "meme_user",
+        "梗图用户",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "meme_admin",
+        "梗图管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool.clone(), test_config(&temporary, database_url));
+
+    let user_cookie = sign_in(&router, &user.username, "127.0.0.1:43103").await;
+    let (_, csrf) = page_session_with_cookie(&router, "/profile", &user_cookie).await;
+    let image_bytes = tiny_png();
+    let body = multipart_body(
+        &csrf,
+        &[("title", "Rust 小猪"), ("tags", "rust, 🐷, rust")],
+        "meme",
+        "pig.png",
+        "image/png",
+        &image_bytes,
+    );
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/memes")
+                .header(header::COOKIE, user_cookie.clone())
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={}", MULTIPART_BOUNDARY),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let meme_id = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM memes WHERE author_user_id = ? AND status = 'pending'",
+    )
+    .bind(&user.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let deduped_tag_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM meme_tags")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(deduped_tag_count, 2);
+
+    let public_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/memes?tag=rust")
+                .header(header::COOKIE, user_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(public_response.status(), StatusCode::OK);
+    let public_html = response_html(public_response).await;
+    assert!(!public_html.contains("Rust 小猪"));
+
+    let user_review_body = format!("csrf_token={csrf}");
+    let forbidden_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/memes/{meme_id}/approve"))
+                .header(header::COOKIE, user_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(user_review_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden_response.status(), StatusCode::FORBIDDEN);
+
+    let admin_cookie = sign_in(&router, &admin.username, "127.0.0.1:43104").await;
+    let (_, admin_csrf) = page_session_with_cookie(&router, "/admin/memes", &admin_cookie).await;
+    let approve_body = format!("csrf_token={admin_csrf}");
+    let approve_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/memes/{meme_id}/approve"))
+                .header(header::COOKIE, admin_cookie.clone())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(approve_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approve_response.status(), StatusCode::SEE_OTHER);
+
+    let admin_page_after_approval = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/admin/memes")
+                .header(header::COOKIE, admin_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let admin_html_after_approval = response_html(admin_page_after_approval).await;
+    assert!(!admin_html_after_approval.contains("Rust 小猪"));
+    assert!(admin_html_after_approval.contains("暂无需要处理的 Meme"));
+
+    let approved_response = router
+        .oneshot(
+            Request::builder()
+                .uri("/memes?tag=rust")
+                .header(header::COOKIE, admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let approved_html = response_html(approved_response).await;
+    assert!(approved_html.contains("Rust 小猪"));
+    assert!(approved_html.contains("梗图用户"));
+    assert!(approved_html.contains("🐷"));
+}
+
 fn sqlite_url(path: &Path) -> String {
     format!("sqlite://{}?mode=rwc", path.display())
 }
@@ -421,6 +570,17 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             home_preview_limit: 5,
             cleanup_interval_hours: 6,
         },
+        memes: MemeConfig {
+            dir: temporary.path().join("memes"),
+            max_upload_bytes: 5 * 1024 * 1024,
+            max_dimension: 3000,
+            max_gif_frames: 120,
+            page_size: 20,
+            home_preview_limit: 6,
+            max_tags_per_meme: 5,
+            max_tag_length: 20,
+            max_title_length: 60,
+        },
     }
 }
 
@@ -439,6 +599,28 @@ async fn page_session(router: &axum::Router, uri: &str) -> (String, String) {
     let html = response_html(response).await;
     let csrf = between(&html, "name=\"csrf_token\" value=\"", "\"").to_owned();
     (cookie, csrf)
+}
+
+async fn sign_in(router: &axum::Router, username: &str, address: &str) -> String {
+    let (anonymous_cookie, login_csrf) = page_session(router, "/login").await;
+    let login_body =
+        format!("csrf_token={login_csrf}&username={username}&password=correct+horse+battery");
+    let login_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header(header::COOKIE, anonymous_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .extension(ConnectInfo(address.parse::<SocketAddr>().unwrap()))
+                .body(Body::from(login_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login_response.status(), StatusCode::SEE_OTHER);
+    response_cookie(&login_response)
 }
 
 async fn page_session_with_cookie(
@@ -487,4 +669,53 @@ async fn response_html(response: axum::response::Response) -> String {
             .to_vec(),
     )
     .unwrap()
+}
+
+const MULTIPART_BOUNDARY: &str = "demo0-test-boundary";
+
+fn multipart_body(
+    csrf: &str,
+    fields: &[(&str, &str)],
+    file_field: &str,
+    file_name: &str,
+    media_type: &str,
+    file_bytes: &[u8],
+) -> Vec<u8> {
+    let mut body = Vec::new();
+    push_text_part(&mut body, "csrf_token", csrf);
+    for (name, value) in fields {
+        push_text_part(&mut body, name, value);
+    }
+    body.extend_from_slice(format!("--{MULTIPART_BOUNDARY}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!(
+            "Content-Disposition: form-data; name=\"{file_field}\"; filename=\"{file_name}\"\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(format!("Content-Type: {media_type}\r\n\r\n").as_bytes());
+    body.extend_from_slice(file_bytes);
+    body.extend_from_slice(format!("\r\n--{MULTIPART_BOUNDARY}--\r\n").as_bytes());
+    body
+}
+
+fn push_text_part(body: &mut Vec<u8>, name: &str, value: &str) {
+    body.extend_from_slice(format!("--{MULTIPART_BOUNDARY}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+    );
+    body.extend_from_slice(value.as_bytes());
+    body.extend_from_slice(b"\r\n");
+}
+
+fn tiny_png() -> Vec<u8> {
+    use image::{ImageFormat, Rgba, RgbaImage};
+
+    let mut image = RgbaImage::new(2, 2);
+    image.put_pixel(0, 0, Rgba([255, 0, 128, 255]));
+    let mut encoded = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut encoded, ImageFormat::Png)
+        .expect("测试图片应能编码为 PNG");
+    encoded.into_inner()
 }

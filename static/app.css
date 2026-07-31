@@ -276,6 +276,12 @@ textarea {
     resize: vertical;
 }
 
+.form-hint {
+    margin: -10px 0 0;
+    color: var(--muted);
+    font-size: 14px;
+}
+
 input::file-selector-button {
     margin-right: 12px;
     padding: 7px 12px;
@@ -413,6 +419,96 @@ small {
     gap: 16px;
 }
 
+.panel {
+    margin-bottom: 26px;
+    padding: 26px;
+    background: rgba(17, 28, 26, 0.78);
+    border: 1px solid rgba(98, 199, 182, 0.14);
+    border-radius: 24px;
+}
+
+.filter-form {
+    display: grid;
+    gap: 12px;
+    margin-top: 22px;
+}
+
+.inline-controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.inline-controls input {
+    max-width: 320px;
+}
+
+.inline-controls button {
+    padding: 12px 18px;
+    color: #07110f;
+    font: inherit;
+    font-weight: 800;
+    cursor: pointer;
+    background: var(--teal);
+    border: 0;
+    border-radius: 999px;
+}
+
+.meme-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 18px;
+}
+
+.meme-grid.compact-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    margin-top: 16px;
+}
+
+.meme-card {
+    padding: 16px;
+    background: rgba(17, 28, 26, 0.78);
+    border: 1px solid rgba(98, 199, 182, 0.14);
+    border-radius: 20px;
+}
+
+.meme-card h2,
+.meme-card h3 {
+    margin: 14px 0 10px;
+}
+
+.meme-image {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+    background: var(--surface-raised);
+    border-radius: 16px;
+}
+
+.tag-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.tag-list a,
+.tag-list span {
+    padding: 5px 9px;
+    color: var(--teal);
+    font-size: 14px;
+    text-decoration: none;
+    background: rgba(98, 199, 182, 0.08);
+    border: 1px solid rgba(98, 199, 182, 0.18);
+    border-radius: 999px;
+}
+
+.load-more {
+    margin-top: 26px;
+    text-align: center;
+}
+
 .message-list.compact-list {
     margin-top: 18px;
 }
@@ -518,6 +614,11 @@ tbody tr:hover {
 .small-button {
     padding: 8px 14px;
     font-size: 14px;
+}
+
+button.danger {
+    color: #1b0905;
+    background: var(--danger);
 }
 
 footer {

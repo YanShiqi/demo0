@@ -18,13 +18,15 @@ use crate::{
     auth,
     avatar::{self, DEFAULT_AVATAR},
     error::AppError,
+    memes::{self, MemeRow, MemeWithTags, NewMeme},
     model::{PageContext, Role, SessionContext, SessionRow, User},
     public_messages::{self, PublicMessageRow},
     time_display,
 };
 use views::{
-    AdminUserView, AdminUsersTemplate, HomeTemplate, LoginTemplate, MessageView, MessagesTemplate,
-    ProfileTemplate, PublicProfileTemplate, RegisterTemplate,
+    AdminMemesTemplate, AdminUserView, AdminUsersTemplate, HomeTemplate, LoginTemplate, MemeView,
+    MemesTemplate, MessageView, MessagesTemplate, NewMemeTemplate, ProfileTemplate,
+    PublicProfileTemplate, RegisterTemplate,
 };
 
 #[derive(Deserialize)]
@@ -58,6 +60,12 @@ pub struct DeleteMessageForm {
 pub struct MessageForm {
     csrf_token: String,
     body: String,
+}
+
+#[derive(Deserialize, Default)]
+pub struct MemeQuery {
+    tag: Option<String>,
+    cursor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -95,12 +103,23 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> Result<R
     .map(|message| home_message_view(message, state.config.display.utc_offset_hours))
     .collect();
     let has_messages = !messages.is_empty();
+    let memes: Vec<MemeView> = memes::list_approved(&state.pool, None, None, &state.config.memes)
+        .await?
+        .items
+        .into_iter()
+        .take(state.config.memes.home_preview_limit as usize)
+        .map(|meme| meme_view(meme, state.config.display.utc_offset_hours))
+        .collect();
+    let has_memes = !memes.is_empty();
     render(
         HomeTemplate {
             ctx,
             messages,
             has_messages,
             message_preview_limit: state.config.messages.home_preview_limit,
+            memes,
+            has_memes,
+            meme_preview_limit: state.config.memes.home_preview_limit,
         },
         StatusCode::OK,
         session.new_cookie,
@@ -297,6 +316,228 @@ pub async fn delete_message(
     let user = require_user(&state, &session).await?;
     public_messages::mark_deleted(&state.pool, &message_id, &user.id, user.parsed_role()).await?;
     redirect(delete_return_to(form.return_to.as_deref()), None)
+}
+
+pub async fn memes_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<MemeQuery>,
+) -> Result<Response, AppError> {
+    let (session, _, ctx) = page_context(&state, &headers).await?;
+    let page = memes::list_approved(
+        &state.pool,
+        query.tag.as_deref(),
+        query.cursor.as_deref(),
+        &state.config.memes,
+    )
+    .await?;
+    let memes: Vec<MemeView> = page
+        .items
+        .into_iter()
+        .map(|meme| meme_view(meme, state.config.display.utc_offset_hours))
+        .collect();
+    let has_memes = !memes.is_empty();
+    let tag = query.tag.unwrap_or_default();
+    render(
+        MemesTemplate {
+            ctx,
+            memes,
+            has_memes,
+            has_tag: !tag.trim().is_empty(),
+            tag,
+            has_next_cursor: page.next_cursor.is_some(),
+            next_cursor: page.next_cursor.unwrap_or_default(),
+            page_size: state.config.memes.page_size,
+        },
+        StatusCode::OK,
+        session.new_cookie,
+    )
+}
+
+pub async fn new_meme_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let user = require_user(&state, &session).await?;
+    render_new_meme(&state, &session, &user, None, String::new(), String::new()).await
+}
+
+pub async fn create_meme(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let user = require_user(&state, &session).await?;
+    let mut csrf_token = None;
+    let mut title = String::new();
+    let mut raw_tags = String::new();
+    let mut image_bytes = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| AppError::BadRequest("无法读取 Meme 上传表单".to_owned()))?
+    {
+        let field_name = field.name().unwrap_or_default().to_owned();
+        match field_name.as_str() {
+            "csrf_token" => {
+                csrf_token = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|_| AppError::BadRequest("CSRF 字段无效".to_owned()))?,
+                );
+            }
+            "title" => {
+                title = field
+                    .text()
+                    .await
+                    .map_err(|_| AppError::BadRequest("标题字段无效".to_owned()))?;
+            }
+            "tags" => {
+                raw_tags = field
+                    .text()
+                    .await
+                    .map_err(|_| AppError::BadRequest("标签字段无效".to_owned()))?;
+            }
+            "meme" => {
+                image_bytes = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|_| AppError::BadRequest("Meme 文件读取失败".to_owned()))?
+                        .to_vec(),
+                );
+            }
+            _ => {}
+        }
+    }
+    auth::verify_csrf(&session, csrf_token.as_deref().unwrap_or_default())?;
+
+    let title = match memes::validate_title(&title, &state.config.memes) {
+        Ok(value) => value,
+        Err(AppError::BadRequest(message)) => {
+            return render_new_meme(&state, &session, &user, Some(&message), title, raw_tags).await;
+        }
+        Err(error) => return Err(error),
+    };
+    let tags = match memes::normalize_tags(&raw_tags, &state.config.memes) {
+        Ok(value) => value,
+        Err(AppError::BadRequest(message)) => {
+            return render_new_meme(&state, &session, &user, Some(&message), title, raw_tags).await;
+        }
+        Err(error) => return Err(error),
+    };
+    let bytes = image_bytes.ok_or_else(|| AppError::BadRequest("请选择 Meme 图片".to_owned()))?;
+    let config = state.config.memes.clone();
+    let processed = tokio::task::spawn_blocking(move || memes::process_image(bytes, &config))
+        .await
+        .map_err(|error| AppError::Internal(format!("Meme 处理任务异常：{error}")))??;
+
+    tokio::fs::create_dir_all(&state.config.memes.dir).await?;
+    let storage_name = format!(
+        "{}.{}",
+        Ulid::new().to_string().to_lowercase(),
+        processed.extension
+    );
+    let temporary_name = format!(".{storage_name}.tmp");
+    let temporary_path = state.config.memes.dir.join(&temporary_name);
+    let final_path = state.config.memes.dir.join(&storage_name);
+    tokio::fs::write(&temporary_path, &processed.bytes).await?;
+    tokio::fs::rename(&temporary_path, &final_path).await?;
+
+    let create_result = memes::create(
+        &state.pool,
+        &user,
+        NewMeme {
+            storage_name: storage_name.clone(),
+            media_type: processed.media_type.to_owned(),
+            title,
+            tags,
+        },
+    )
+    .await;
+    if let Err(error) = create_result {
+        // 数据库写入失败时清除刚落盘的文件，避免长期留下无人引用的图片。
+        let _ = tokio::fs::remove_file(&final_path).await;
+        return Err(error);
+    }
+    tracing::info!(
+        user_id = %user.id,
+        width = processed.width,
+        height = processed.height,
+        frames = processed.frame_count,
+        "Meme 已提交待审核"
+    );
+    redirect("/memes", None)
+}
+
+pub async fn meme_image(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(meme_id): Path<String>,
+) -> Result<Response, AppError> {
+    let (_, user, _) = page_context(&state, &headers).await?;
+    let can_view_pending =
+        user.is_some_and(|user| matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin));
+    let (storage_name, media_type) =
+        memes::image_info(&state.pool, &meme_id, can_view_pending).await?;
+    if !safe_storage_name(&storage_name) {
+        return Err(AppError::NotFound);
+    }
+    let bytes = tokio::fs::read(state.config.memes.dir.join(storage_name)).await?;
+    binary_response(bytes, &media_type, "public, max-age=300")
+}
+
+pub async fn admin_memes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let actor = require_admin(&state, &session).await?;
+    let memes: Vec<MemeView> = memes::list_for_admin(&state.pool)
+        .await?
+        .into_iter()
+        .map(|meme| meme_view(meme, state.config.display.utc_offset_hours))
+        .collect();
+    let has_memes = !memes.is_empty();
+    render(
+        AdminMemesTemplate {
+            ctx: PageContext::authenticated(session.csrf_token, &actor),
+            memes,
+            has_memes,
+        },
+        StatusCode::OK,
+        None,
+    )
+}
+
+pub async fn approve_meme(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(meme_id): Path<String>,
+    Form(form): Form<CsrfForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let actor = require_admin(&state, &session).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    memes::approve(&state.pool, &meme_id, &actor).await?;
+    redirect("/admin/memes", None)
+}
+
+pub async fn delete_meme(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(meme_id): Path<String>,
+    Form(form): Form<CsrfForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let actor = require_admin(&state, &session).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    memes::mark_deleted(&state.pool, &meme_id, &actor).await?;
+    redirect("/admin/memes", None)
 }
 
 pub async fn profile_page(
@@ -653,6 +894,14 @@ async fn require_super_admin(state: &AppState, session: &SessionRow) -> Result<U
     Ok(user)
 }
 
+async fn require_admin(state: &AppState, session: &SessionRow) -> Result<User, AppError> {
+    let user = require_user(state, session).await?;
+    if !matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin) {
+        return Err(AppError::Forbidden);
+    }
+    Ok(user)
+}
+
 async fn render_profile(
     state: &AppState,
     session: &SessionRow,
@@ -731,6 +980,34 @@ async fn render_messages(
     )
 }
 
+async fn render_new_meme(
+    state: &AppState,
+    session: &SessionRow,
+    user: &User,
+    error: Option<&str>,
+    title: String,
+    tags: String,
+) -> Result<Response, AppError> {
+    render(
+        NewMemeTemplate {
+            ctx: PageContext::authenticated(session.csrf_token.clone(), user),
+            has_error: error.is_some(),
+            error: error.unwrap_or_default().to_owned(),
+            title,
+            tags,
+            max_upload_kib: state.config.memes.max_upload_bytes / 1024,
+            max_tags: state.config.memes.max_tags_per_meme,
+            max_title_length: state.config.memes.max_title_length,
+        },
+        if error.is_some() {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::OK
+        },
+        None,
+    )
+}
+
 fn message_view(
     message: PublicMessageRow,
     current_user: Option<&User>,
@@ -764,6 +1041,30 @@ fn home_message_view(message: PublicMessageRow, utc_offset_hours: i8) -> Message
         body: message.body,
         created_at: time_display::friendly_rfc3339(&message.created_at, utc_offset_hours),
         can_delete: false,
+    }
+}
+
+fn meme_view(meme: MemeWithTags, utc_offset_hours: i8) -> MemeView {
+    let status_label = meme_status_label(&meme.row);
+    MemeView {
+        id: meme.row.id,
+        author_user_id: meme.row.author_user_id,
+        username: meme.row.username,
+        nickname: meme.row.nickname,
+        title: meme.row.title,
+        status_label,
+        created_at: time_display::friendly_rfc3339(&meme.row.created_at, utc_offset_hours),
+        has_tags: !meme.tags.is_empty(),
+        tags: meme.tags,
+    }
+}
+
+fn meme_status_label(meme: &MemeRow) -> &'static str {
+    match meme.status.as_str() {
+        memes::STATUS_PENDING => "待审核",
+        memes::STATUS_APPROVED => "已通过",
+        memes::STATUS_DELETED => "已删除",
+        _ => "未知",
     }
 }
 

@@ -11,8 +11,10 @@
     <a class="brand" href="/">牢笼</a>
     <nav aria-label="主导航">
       <a href="/messages">留言板</a>
+      <a href="/memes">Memes</a>
       {% if ctx.authenticated %}
         <a href="/profile">{{ ctx.nickname }}</a>
+        {% if ctx.is_admin %}<a href="/admin/memes">Meme 审核</a>{% endif %}
         {% if ctx.is_super_admin %}<a href="/admin/users">用户管理</a>{% endif %}
         <form action="/logout" method="post" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">

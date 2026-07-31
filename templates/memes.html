@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Meme 展示墙 · 牢笼{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="preview-heading">
+    <div>
+      <p class="eyebrow">PUBLIC MEMES</p>
+      <h1>Meme 展示墙</h1>
+    </div>
+    {% if ctx.authenticated %}<a class="button" href="/memes/new">提交 Meme</a>{% endif %}
+  </div>
+  <form class="filter-form" action="/memes" method="get">
+    <label for="tag">按标签过滤</label>
+    <div class="inline-controls">
+      <input id="tag" name="tag" value="{{ tag }}" placeholder="例如：rust、🐷">
+      <button type="submit">筛选</button>
+      {% if has_tag %}<a href="/memes">清除</a>{% endif %}
+    </div>
+  </form>
+  <p class="muted">每次最多展示 {{ page_size }} 张，继续浏览请使用底部“加载更多”。</p>
+</section>
+
+{% if has_memes %}
+<section class="meme-grid">
+  {% for meme in memes %}
+  <article class="meme-card">
+    <img class="meme-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
+    <h2>{{ meme.title }}</h2>
+    <a class="message-author" href="/u/{{ meme.username }}">
+      <img class="avatar" src="/users/{{ meme.author_user_id }}/avatar" alt="{{ meme.nickname }} 的头像">
+      <span><strong>{{ meme.nickname }}</strong><small>@{{ meme.username }} · {{ meme.created_at }}</small></span>
+    </a>
+    {% if meme.has_tags %}
+    <div class="tag-list">
+      {% for tag in meme.tags %}
+        <a href="/memes?tag={{ tag }}">#{{ tag }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="panel empty-state">
+  {% if has_tag %}
+    <p>当前标签下还没有已审核的 Meme。</p>
+  {% else %}
+    <p>还没有已审核的 Meme。第一张图，往往最有历史包袱。</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if has_next_cursor %}
+<p class="load-more">
+  {% if has_tag %}
+    <a class="button secondary" href="/memes?tag={{ tag }}&cursor={{ next_cursor }}">加载更多</a>
+  {% else %}
+    <a class="button secondary" href="/memes?cursor={{ next_cursor }}">加载更多</a>
+  {% endif %}
+</p>
+{% endif %}
+{% endblock %}

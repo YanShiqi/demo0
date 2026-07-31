@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Meme 审核 · 牢笼{% endblock %}
+{% block content %}
+<section class="panel">
+  <p class="eyebrow">ADMIN</p>
+  <h1>Meme 审核</h1>
+  <p class="muted">待审核内容通过后会公开展示；删除会软删除记录，第一版暂不立即物理删除图片。</p>
+</section>
+
+{% if has_memes %}
+<section class="meme-grid">
+  {% for meme in memes %}
+  <article class="meme-card admin-card">
+    <img class="meme-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
+    <h2>{{ meme.title }}</h2>
+    <p class="muted">{{ meme.status_label }} · {{ meme.nickname }} · {{ meme.created_at }}</p>
+    {% if meme.has_tags %}
+    <div class="tag-list">
+      {% for tag in meme.tags %}<span>#{{ tag }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    <div class="actions">
+      <form action="/admin/memes/{{ meme.id }}/approve" method="post">
+        <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+        <button class="small-button" type="submit">通过</button>
+      </form>
+      <form action="/admin/memes/{{ meme.id }}/delete" method="post">
+        <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+        <button class="small-button danger" type="submit">删除</button>
+      </form>
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="panel empty-state"><p>暂无需要处理的 Meme。</p></section>
+{% endif %}
+{% endblock %}

@@ -16,6 +16,15 @@ const DEFAULT_MESSAGE_MAX_LENGTH: usize = 300;
 const DEFAULT_MESSAGE_PAGE_SIZE: i64 = 30;
 const DEFAULT_MESSAGE_HOME_PREVIEW_LIMIT: i64 = 5;
 const DEFAULT_MESSAGE_CLEANUP_INTERVAL_HOURS: u64 = 6;
+const DEFAULT_MEME_DIR: &str = "data/memes";
+const DEFAULT_MEME_MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024;
+const DEFAULT_MEME_MAX_DIMENSION: u32 = 3000;
+const DEFAULT_MEME_MAX_GIF_FRAMES: usize = 120;
+const DEFAULT_MEME_PAGE_SIZE: i64 = 20;
+const DEFAULT_MEME_HOME_PREVIEW_LIMIT: i64 = 6;
+const DEFAULT_MEME_MAX_TAGS_PER_MEME: usize = 5;
+const DEFAULT_MEME_MAX_TAG_LENGTH: usize = 20;
+const DEFAULT_MEME_MAX_TITLE_LENGTH: usize = 60;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -26,6 +35,7 @@ pub struct Config {
     pub cookie_secure: bool,
     pub display: DisplayConfig,
     pub messages: MessageConfig,
+    pub memes: MemeConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -41,6 +51,19 @@ pub struct MessageConfig {
     pub page_size: i64,
     pub home_preview_limit: i64,
     pub cleanup_interval_hours: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct MemeConfig {
+    pub dir: PathBuf,
+    pub max_upload_bytes: usize,
+    pub max_dimension: u32,
+    pub max_gif_frames: usize,
+    pub page_size: i64,
+    pub home_preview_limit: i64,
+    pub max_tags_per_meme: usize,
+    pub max_tag_length: usize,
+    pub max_title_length: usize,
 }
 
 impl Config {
@@ -81,6 +104,7 @@ impl Config {
             .unwrap_or(DEFAULT_COOKIE_SECURE);
         let display = DisplayConfig::from_sources(file_config.display)?;
         let messages = MessageConfig::from_sources(file_config.messages)?;
+        let memes = MemeConfig::from_sources(file_config.memes)?;
 
         Ok(Self {
             host,
@@ -90,6 +114,7 @@ impl Config {
             cookie_secure,
             display,
             messages,
+            memes,
         })
     }
 
@@ -97,6 +122,62 @@ impl Config {
         format!("{}:{}", self.host, self.port)
             .parse()
             .context("APP_HOST 或 APP_PORT 无效")
+    }
+}
+
+impl MemeConfig {
+    fn from_sources(file_config: Option<MemeFileConfig>) -> Result<Self> {
+        let file_config = file_config.unwrap_or_default();
+        let dir = env::var("MEME_DIR")
+            .ok()
+            .or(file_config.dir)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_MEME_DIR));
+        let max_upload_bytes = parse_optional_env("MEME_MAX_UPLOAD_BYTES")?
+            .or(file_config.max_upload_bytes)
+            .unwrap_or(DEFAULT_MEME_MAX_UPLOAD_BYTES);
+        let max_dimension = parse_optional_env("MEME_MAX_DIMENSION")?
+            .or(file_config.max_dimension)
+            .unwrap_or(DEFAULT_MEME_MAX_DIMENSION);
+        let max_gif_frames = parse_optional_env("MEME_MAX_GIF_FRAMES")?
+            .or(file_config.max_gif_frames)
+            .unwrap_or(DEFAULT_MEME_MAX_GIF_FRAMES);
+        let page_size = parse_optional_env("MEME_PAGE_SIZE")?
+            .or(file_config.page_size)
+            .unwrap_or(DEFAULT_MEME_PAGE_SIZE);
+        let home_preview_limit = parse_optional_env("MEME_HOME_PREVIEW_LIMIT")?
+            .or(file_config.home_preview_limit)
+            .unwrap_or(DEFAULT_MEME_HOME_PREVIEW_LIMIT);
+        let max_tags_per_meme = parse_optional_env("MEME_MAX_TAGS_PER_MEME")?
+            .or(file_config.max_tags_per_meme)
+            .unwrap_or(DEFAULT_MEME_MAX_TAGS_PER_MEME);
+        let max_tag_length = parse_optional_env("MEME_MAX_TAG_LENGTH")?
+            .or(file_config.max_tag_length)
+            .unwrap_or(DEFAULT_MEME_MAX_TAG_LENGTH);
+        let max_title_length = parse_optional_env("MEME_MAX_TITLE_LENGTH")?
+            .or(file_config.max_title_length)
+            .unwrap_or(DEFAULT_MEME_MAX_TITLE_LENGTH);
+
+        anyhow::ensure!(max_upload_bytes > 0, "MEME_MAX_UPLOAD_BYTES 必须大于 0");
+        anyhow::ensure!(max_dimension > 0, "MEME_MAX_DIMENSION 必须大于 0");
+        anyhow::ensure!(max_gif_frames > 0, "MEME_MAX_GIF_FRAMES 必须大于 0");
+        anyhow::ensure!(page_size > 0, "MEME_PAGE_SIZE 必须大于 0");
+        anyhow::ensure!(home_preview_limit > 0, "MEME_HOME_PREVIEW_LIMIT 必须大于 0");
+        anyhow::ensure!(max_tags_per_meme > 0, "MEME_MAX_TAGS_PER_MEME 必须大于 0");
+        anyhow::ensure!(max_tag_length > 0, "MEME_MAX_TAG_LENGTH 必须大于 0");
+        anyhow::ensure!(max_title_length > 0, "MEME_MAX_TITLE_LENGTH 必须大于 0");
+
+        Ok(Self {
+            dir,
+            max_upload_bytes,
+            max_dimension,
+            max_gif_frames,
+            page_size,
+            home_preview_limit,
+            max_tags_per_meme,
+            max_tag_length,
+            max_title_length,
+        })
     }
 }
 
@@ -166,6 +247,7 @@ struct FileConfig {
     session: Option<SessionFileConfig>,
     display: Option<DisplayFileConfig>,
     messages: Option<MessageFileConfig>,
+    memes: Option<MemeFileConfig>,
 }
 
 impl FileConfig {
@@ -214,6 +296,19 @@ struct MessageFileConfig {
     page_size: Option<i64>,
     home_preview_limit: Option<i64>,
     cleanup_interval_hours: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MemeFileConfig {
+    dir: Option<String>,
+    max_upload_bytes: Option<usize>,
+    max_dimension: Option<u32>,
+    max_gif_frames: Option<usize>,
+    page_size: Option<i64>,
+    home_preview_limit: Option<i64>,
+    max_tags_per_meme: Option<usize>,
+    max_tag_length: Option<usize>,
+    max_title_length: Option<usize>,
 }
 
 fn parse_optional_env<T>(name: &str) -> Result<Option<T>>

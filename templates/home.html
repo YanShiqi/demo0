@@ -5,6 +5,28 @@
   <p class="eyebrow">RUST · WSL · LEARNING</p>
   <h1>收容 控制 保护</h1>
   {% if ctx.authenticated %}
+    <section class="home-message-preview" aria-label="Meme 展示墙预览">
+      <div class="preview-heading">
+        <h2>Meme 展示墙</h2>
+        <a href="/memes">查看全部</a>
+      </div>
+      <p class="muted">最多展示 {{ meme_preview_limit }} 张已审核 Meme。</p>
+      <div class="meme-grid compact-grid">
+        {% if has_memes %}
+          {% for meme in memes %}
+          <article class="meme-card">
+            <a href="/memes">
+              <img class="meme-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
+            </a>
+            <h3>{{ meme.title }}</h3>
+            <p class="muted">by {{ meme.nickname }}</p>
+          </article>
+          {% endfor %}
+        {% else %}
+          <p class="empty-state">还没有通过审核的 Meme，去提交第一张吧。</p>
+        {% endif %}
+      </div>
+    </section>
     <section class="home-message-preview" aria-label="公共留言板预览">
       <div class="preview-heading">
         <h2>公共留言板</h2>

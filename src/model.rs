@@ -89,6 +89,7 @@ pub struct PageContext {
     pub csrf_token: String,
     pub authenticated: bool,
     pub nickname: String,
+    pub is_admin: bool,
     pub is_super_admin: bool,
 }
 
@@ -98,6 +99,7 @@ impl PageContext {
             csrf_token,
             authenticated: false,
             nickname: String::new(),
+            is_admin: false,
             is_super_admin: false,
         }
     }
@@ -107,6 +109,7 @@ impl PageContext {
             csrf_token,
             authenticated: true,
             nickname: user.nickname.clone(),
+            is_admin: matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin),
             is_super_admin: user.parsed_role() == Role::SuperAdmin,
         }
     }
