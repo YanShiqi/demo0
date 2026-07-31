@@ -8,6 +8,17 @@
 cargo run
 ```
 
+也可以用脚本后台运行，不占用当前终端：
+
+```bash
+./scripts/server.sh start
+./scripts/server.sh status
+./scripts/server.sh logs
+./scripts/server.sh stop
+```
+
+脚本会先构建项目，再用 `nohup` 后台启动 `target/debug/demo0`。PID 和日志保存在 `data/run/` 与 `data/logs/`，这些运行数据不会提交到 Git。
+
 程序启动时会先读取 `config/default.toml`，再读取仓库根目录的 `.env`，系统环境变量可覆盖其中的值。当前 WSL 环境为配合 Windows `portproxy`，使用 `APP_HOST=0.0.0.0` 和端口 `6324`；Windows 浏览器仍访问 <http://127.0.0.1:6324>。
 
 ```bash
