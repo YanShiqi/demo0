@@ -25,7 +25,7 @@ use crate::{
 };
 use views::{
     AdminMemesTemplate, AdminUserView, AdminUsersTemplate, HomeTemplate, LoginTemplate, MemeView,
-    MemesTemplate, MessageView, MessagesTemplate, NewMemeTemplate, ProfileTemplate,
+    MemesTemplate, MessageView, MessagesTemplate, NewMemeTemplate, PopularTagView, ProfileTemplate,
     PublicProfileTemplate, RegisterTemplate,
 };
 
@@ -350,11 +350,20 @@ pub async fn memes_page(
         .collect();
     let has_memes = !memes.is_empty();
     let tag = query.tag.unwrap_or_default();
+    let popular_tags: Vec<PopularTagView> =
+        memes::list_popular_tags(&state.pool, &state.config.memes)
+            .await?
+            .into_iter()
+            .map(|popular_tag| popular_tag_view(popular_tag, &tag))
+            .collect();
+    let has_popular_tags = !popular_tags.is_empty();
     render(
         MemesTemplate {
             ctx,
             memes,
             has_memes,
+            popular_tags,
+            has_popular_tags,
             has_tag: !tag.trim().is_empty(),
             tag,
             current_page: page.current_page,
@@ -1116,6 +1125,18 @@ fn meme_view(meme: MemeWithTags, utc_offset_hours: i8) -> MemeView {
         created_at: time_display::friendly_rfc3339(&meme.row.created_at, utc_offset_hours),
         has_tags: !meme.tags.is_empty(),
         tags: meme.tags,
+    }
+}
+
+fn popular_tag_view(tag: memes::PopularTag, selected_tag: &str) -> PopularTagView {
+    let selected_tag = selected_tag.trim();
+    let is_active = !selected_tag.is_empty() && selected_tag == tag.name;
+    let href = format!("/memes?tag={}", percent_encode_query_value(&tag.name));
+    PopularTagView {
+        name: tag.name,
+        usage_count: tag.usage_count,
+        href,
+        is_active,
     }
 }
 

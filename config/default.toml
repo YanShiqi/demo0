@@ -49,6 +49,8 @@ max_decoded_pixels = 50000000
 page_size = 20
 # 首页 Meme 预览最多展示数量。
 home_preview_limit = 8
+# Meme 展示墙最多展示的热门标签数量。
+popular_tag_limit = 10
 # 每个 Meme 最多可绑定的标签数量。
 max_tags_per_meme = 5
 # 单个标签最大可见字符数；支持中文和 emoji。

@@ -893,6 +893,86 @@ async fn meme_wall_uses_numbered_pagination_with_previous_and_next_links() {
     assert!(tagged_second_html.contains("href=\"/memes?tag=page&amp;page=1\""));
 }
 
+#[tokio::test]
+async fn meme_wall_shows_popular_approved_tags_as_filter_links() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("meme-popular-tags.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let author = auth::create_user(
+        &pool,
+        "tag_meme_author",
+        "标签作者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "tag_meme_admin",
+        "标签管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    approved_meme_with_tags(
+        &pool,
+        &author,
+        &admin,
+        "rust_one.png",
+        "Rust 标签一",
+        30,
+        &["rust", "搞笑"],
+    )
+    .await;
+    approved_meme_with_tags(
+        &pool,
+        &author,
+        &admin,
+        "rust_two.png",
+        "Rust 标签二",
+        20,
+        &["rust", "🐷"],
+    )
+    .await;
+    let hidden_pending_id = memes::create(
+        &pool,
+        &author,
+        NewMeme {
+            storage_name: "pendingtag.png".to_owned(),
+            media_type: "image/png".to_owned(),
+            title: "待审核标签不应统计".to_owned(),
+            tags: vec!["待审核".to_owned()],
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!hidden_pending_id.is_empty());
+    let mut config = test_config(&temporary, database_url);
+    config.memes.popular_tag_limit = 2;
+    let router = app::build(pool, config);
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/memes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = response_html(response).await;
+    assert!(html.contains("热门标签"));
+    assert!(html.contains("href=\"/memes?tag=rust\""));
+    assert!(html.contains("#rust"));
+    assert!(html.contains("2"));
+    assert!(html.contains("href=\"/memes?tag="));
+    assert!(!html.contains("#待审核"));
+}
+
 fn sqlite_url(path: &Path) -> String {
     format!("sqlite://{}?mode=rwc", path.display())
 }
@@ -923,6 +1003,7 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             max_decoded_pixels: 50_000_000,
             page_size: 20,
             home_preview_limit: 6,
+            popular_tag_limit: 10,
             max_tags_per_meme: 5,
             max_tag_length: 20,
             max_title_length: 60,
@@ -1062,6 +1143,27 @@ async fn approved_meme(
     title: &str,
     created_at_epoch: i64,
 ) -> String {
+    approved_meme_with_tags(
+        pool,
+        author,
+        admin,
+        storage_name,
+        title,
+        created_at_epoch,
+        &["page"],
+    )
+    .await
+}
+
+async fn approved_meme_with_tags(
+    pool: &sqlx::SqlitePool,
+    author: &User,
+    admin: &User,
+    storage_name: &str,
+    title: &str,
+    created_at_epoch: i64,
+    tags: &[&str],
+) -> String {
     let meme_id = memes::create(
         pool,
         author,
@@ -1069,7 +1171,7 @@ async fn approved_meme(
             storage_name: storage_name.to_owned(),
             media_type: "image/png".to_owned(),
             title: title.to_owned(),
-            tags: vec!["page".to_owned()],
+            tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
         },
     )
     .await

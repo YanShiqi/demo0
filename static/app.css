@@ -514,6 +514,16 @@ small {
     margin-top: 14px;
 }
 
+.popular-tags {
+    display: grid;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.tag-list.compact {
+    margin-top: 0;
+}
+
 .tag-list a,
 .tag-list span {
     padding: 5px 9px;
@@ -523,6 +533,17 @@ small {
     background: rgba(98, 199, 182, 0.08);
     border: 1px solid rgba(98, 199, 182, 0.18);
     border-radius: 999px;
+}
+
+.tag-list a.active {
+    color: #06100e;
+    background: var(--teal);
+    border-color: var(--teal);
+}
+
+.tag-list small {
+    color: inherit;
+    font-size: 12px;
 }
 
 .pagination {

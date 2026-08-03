@@ -74,12 +74,22 @@ pub struct MemeView {
     pub has_tags: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct PopularTagView {
+    pub name: String,
+    pub usage_count: i64,
+    pub href: String,
+    pub is_active: bool,
+}
+
 #[derive(Template)]
 #[template(path = "memes.html")]
 pub struct MemesTemplate {
     pub ctx: PageContext,
     pub memes: Vec<MemeView>,
     pub has_memes: bool,
+    pub popular_tags: Vec<PopularTagView>,
+    pub has_popular_tags: bool,
     pub tag: String,
     pub has_tag: bool,
     pub current_page: i64,

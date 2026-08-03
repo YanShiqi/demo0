@@ -17,6 +17,20 @@
       {% if has_tag %}<a href="/memes">清除</a>{% endif %}
     </div>
   </form>
+  {% if has_popular_tags %}
+  <div class="popular-tags">
+    <span class="muted">热门标签</span>
+    <div class="tag-list compact">
+      {% for popular_tag in popular_tags %}
+        {% if popular_tag.is_active %}
+        <a class="active" href="{{ popular_tag.href }}">#{{ popular_tag.name }} <small>{{ popular_tag.usage_count }}</small></a>
+        {% else %}
+        <a href="{{ popular_tag.href }}">#{{ popular_tag.name }} <small>{{ popular_tag.usage_count }}</small></a>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
   <p class="muted">每页最多展示 {{ page_size }} 张，可使用底部页码前后翻页。</p>
 </section>
 

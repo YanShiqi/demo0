@@ -88,6 +88,12 @@ pub struct MemePage {
     pub next_page: Option<i64>,
 }
 
+#[derive(Clone, Debug, FromRow)]
+pub struct PopularTag {
+    pub name: String,
+    pub usage_count: i64,
+}
+
 #[derive(Clone, Debug)]
 pub struct ProcessedMeme {
     pub bytes: Vec<u8>,
@@ -258,6 +264,21 @@ pub async fn list_approved(
         .await?,
     };
     page_from_rows(pool, rows, config.page_size as usize, page).await
+}
+
+pub async fn list_popular_tags(
+    pool: &SqlitePool,
+    config: &MemeConfig,
+) -> Result<Vec<PopularTag>, AppError> {
+    // 热门标签只统计已审核通过的 Meme，避免待审核内容提前暴露到公开页面。
+    sqlx::query_as::<_, PopularTag>(
+        "SELECT meme_tags.name, COUNT(*) AS usage_count FROM meme_tags JOIN meme_tag_links ON meme_tag_links.tag_id = meme_tags.id JOIN memes ON memes.id = meme_tag_links.meme_id WHERE memes.status = ? GROUP BY meme_tags.id, meme_tags.name ORDER BY usage_count DESC, meme_tags.name ASC LIMIT ?",
+    )
+    .bind(STATUS_APPROVED)
+    .bind(config.popular_tag_limit)
+    .fetch_all(pool)
+    .await
+    .map_err(Into::into)
 }
 
 pub async fn list_for_admin(
@@ -632,6 +653,7 @@ mod tests {
             max_decoded_pixels: 50_000_000,
             page_size: 20,
             home_preview_limit: 6,
+            popular_tag_limit: 10,
             max_tags_per_meme: 5,
             max_tag_length: 20,
             max_title_length: 60,

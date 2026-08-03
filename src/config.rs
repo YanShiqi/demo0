@@ -23,6 +23,7 @@ const DEFAULT_MEME_MAX_GIF_FRAMES: usize = 120;
 const DEFAULT_MEME_MAX_DECODED_PIXELS: u64 = 50_000_000;
 const DEFAULT_MEME_PAGE_SIZE: i64 = 20;
 const DEFAULT_MEME_HOME_PREVIEW_LIMIT: i64 = 6;
+const DEFAULT_MEME_POPULAR_TAG_LIMIT: i64 = 10;
 const DEFAULT_MEME_MAX_TAGS_PER_MEME: usize = 5;
 const DEFAULT_MEME_MAX_TAG_LENGTH: usize = 20;
 const DEFAULT_MEME_MAX_TITLE_LENGTH: usize = 60;
@@ -63,6 +64,7 @@ pub struct MemeConfig {
     pub max_decoded_pixels: u64,
     pub page_size: i64,
     pub home_preview_limit: i64,
+    pub popular_tag_limit: i64,
     pub max_tags_per_meme: usize,
     pub max_tag_length: usize,
     pub max_title_length: usize,
@@ -153,6 +155,9 @@ impl MemeConfig {
         let home_preview_limit = parse_optional_env("MEME_HOME_PREVIEW_LIMIT")?
             .or(file_config.home_preview_limit)
             .unwrap_or(DEFAULT_MEME_HOME_PREVIEW_LIMIT);
+        let popular_tag_limit = parse_optional_env("MEME_POPULAR_TAG_LIMIT")?
+            .or(file_config.popular_tag_limit)
+            .unwrap_or(DEFAULT_MEME_POPULAR_TAG_LIMIT);
         let max_tags_per_meme = parse_optional_env("MEME_MAX_TAGS_PER_MEME")?
             .or(file_config.max_tags_per_meme)
             .unwrap_or(DEFAULT_MEME_MAX_TAGS_PER_MEME);
@@ -169,6 +174,7 @@ impl MemeConfig {
         anyhow::ensure!(max_decoded_pixels > 0, "MEME_MAX_DECODED_PIXELS 必须大于 0");
         anyhow::ensure!(page_size > 0, "MEME_PAGE_SIZE 必须大于 0");
         anyhow::ensure!(home_preview_limit > 0, "MEME_HOME_PREVIEW_LIMIT 必须大于 0");
+        anyhow::ensure!(popular_tag_limit > 0, "MEME_POPULAR_TAG_LIMIT 必须大于 0");
         anyhow::ensure!(max_tags_per_meme > 0, "MEME_MAX_TAGS_PER_MEME 必须大于 0");
         anyhow::ensure!(max_tag_length > 0, "MEME_MAX_TAG_LENGTH 必须大于 0");
         anyhow::ensure!(max_title_length > 0, "MEME_MAX_TITLE_LENGTH 必须大于 0");
@@ -181,6 +187,7 @@ impl MemeConfig {
             max_decoded_pixels,
             page_size,
             home_preview_limit,
+            popular_tag_limit,
             max_tags_per_meme,
             max_tag_length,
             max_title_length,
@@ -314,6 +321,7 @@ struct MemeFileConfig {
     max_decoded_pixels: Option<u64>,
     page_size: Option<i64>,
     home_preview_limit: Option<i64>,
+    popular_tag_limit: Option<i64>,
     max_tags_per_meme: Option<usize>,
     max_tag_length: Option<usize>,
     max_title_length: Option<usize>,
