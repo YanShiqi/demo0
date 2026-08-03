@@ -67,6 +67,7 @@ pub struct MemeView {
     pub username: String,
     pub nickname: String,
     pub title: String,
+    pub is_pending: bool,
     pub status_label: &'static str,
     pub created_at: String,
     pub tags: Vec<String>,
@@ -81,8 +82,11 @@ pub struct MemesTemplate {
     pub has_memes: bool,
     pub tag: String,
     pub has_tag: bool,
-    pub next_cursor: String,
-    pub has_next_cursor: bool,
+    pub current_page: i64,
+    pub previous_page: i64,
+    pub has_previous_page: bool,
+    pub next_page: i64,
+    pub has_next_page: bool,
     pub page_size: i64,
 }
 
@@ -105,6 +109,12 @@ pub struct AdminMemesTemplate {
     pub ctx: PageContext,
     pub memes: Vec<MemeView>,
     pub has_memes: bool,
+    pub pending_filter_active: bool,
+    pub approved_filter_active: bool,
+    pub empty_message: &'static str,
+    pub query: String,
+    pub has_query: bool,
+    pub return_to: String,
 }
 
 #[derive(Template)]
@@ -123,6 +133,8 @@ pub struct ProfileTemplate {
     pub messages: Vec<MessageView>,
     pub has_messages: bool,
     pub retention_days: i64,
+    pub memes: Vec<MemeView>,
+    pub has_memes: bool,
 }
 
 #[derive(Template)]

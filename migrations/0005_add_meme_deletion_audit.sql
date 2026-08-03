@@ -1,0 +1,2 @@
+ALTER TABLE memes ADD COLUMN deleted_at VARCHAR(40);
+ALTER TABLE memes ADD COLUMN deleted_by CHAR(26) REFERENCES users(id);

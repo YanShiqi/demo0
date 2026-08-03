@@ -17,7 +17,7 @@
       {% if has_tag %}<a href="/memes">清除</a>{% endif %}
     </div>
   </form>
-  <p class="muted">每次最多展示 {{ page_size }} 张，继续浏览请使用底部“加载更多”。</p>
+  <p class="muted">每页最多展示 {{ page_size }} 张，可使用底部页码前后翻页。</p>
 </section>
 
 {% if has_memes %}
@@ -50,13 +50,25 @@
 </section>
 {% endif %}
 
-{% if has_next_cursor %}
-<p class="load-more">
+{% if has_previous_page || has_next_page %}
+<nav class="pagination" aria-label="Meme 分页">
+  {% if has_previous_page %}
   {% if has_tag %}
-    <a class="button secondary" href="/memes?tag={{ tag }}&cursor={{ next_cursor }}">加载更多</a>
+    <a class="button secondary" href="/memes?tag={{ tag }}&amp;page={{ previous_page }}">上一页</a>
   {% else %}
-    <a class="button secondary" href="/memes?cursor={{ next_cursor }}">加载更多</a>
+    <a class="button secondary" href="/memes?page={{ previous_page }}">上一页</a>
   {% endif %}
-</p>
+  {% endif %}
+  <span class="page-indicator">第 {{ current_page }} 页</span>
+  {% if has_next_page %}
+  {% if has_tag %}
+    <a class="button secondary" href="/memes?tag={{ tag }}&amp;page={{ next_page }}">下一页</a>
+  {% else %}
+    <a class="button secondary" href="/memes?page={{ next_page }}">下一页</a>
+  {% endif %}
+  {% endif %}
+</nav>
+{% else %}
+<p class="pagination solo"><span class="page-indicator">第 {{ current_page }} 页</span></p>
 {% endif %}
 {% endblock %}

@@ -60,5 +60,31 @@
       <p class="empty-state">你最近还没有发布留言。</p>
     {% endif %}
   </section>
+  <section class="form-card compact wide">
+    <h2>我的 Memes</h2>
+    <p class="muted">待审核和已通过的内容都显示在这里；删除后将不再公开展示。</p>
+    {% if has_memes %}
+      <div class="meme-grid compact-grid">
+        {% for meme in memes %}
+        <article class="meme-card">
+          <img class="meme-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
+          <h3>{{ meme.title }}</h3>
+          <p class="muted">{{ meme.status_label }} · {{ meme.created_at }}</p>
+          {% if meme.has_tags %}
+          <div class="tag-list">
+            {% for tag in meme.tags %}<span>#{{ tag }}</span>{% endfor %}
+          </div>
+          {% endif %}
+          <form action="/memes/{{ meme.id }}/delete" method="post" class="delete-meme-form">
+            <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+            <button class="link-button danger-link" type="submit">删除此 Meme</button>
+          </form>
+        </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="empty-state">你还没有提交 Meme。</p>
+    {% endif %}
+  </section>
 </div>
 {% endblock %}

@@ -10,6 +10,7 @@ use demo0::{
     config::{Config, DisplayConfig, MemeConfig, MessageConfig},
     db,
     error::AppError,
+    memes::{self, NewMeme},
     model::{Role, User},
 };
 use http_body_util::BodyExt;
@@ -516,6 +517,19 @@ async fn memes_require_review_before_public_listing() {
         .await
         .unwrap();
     assert_eq!(approve_response.status(), StatusCode::SEE_OTHER);
+    let admin_meme_id = memes::create(
+        &pool,
+        &admin,
+        NewMeme {
+            storage_name: "adminmeme.png".to_owned(),
+            media_type: "image/png".to_owned(),
+            title: "管理员自己的 Meme".to_owned(),
+            tags: vec!["ops".to_owned()],
+        },
+    )
+    .await
+    .unwrap();
+    memes::approve(&pool, &admin_meme_id, &admin).await.unwrap();
 
     let admin_page_after_approval = router
         .clone()
@@ -533,10 +547,11 @@ async fn memes_require_review_before_public_listing() {
     assert!(admin_html_after_approval.contains("暂无需要处理的 Meme"));
 
     let approved_response = router
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/memes?tag=rust")
-                .header(header::COOKIE, admin_cookie)
+                .header(header::COOKIE, admin_cookie.clone())
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -546,6 +561,336 @@ async fn memes_require_review_before_public_listing() {
     assert!(approved_html.contains("Rust 小猪"));
     assert!(approved_html.contains("梗图用户"));
     assert!(approved_html.contains("🐷"));
+
+    let approved_admin_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/admin/memes?status=approved")
+                .header(header::COOKIE, admin_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approved_admin_response.status(), StatusCode::OK);
+    let approved_admin_html = response_html(approved_admin_response).await;
+    assert!(approved_admin_html.contains("Rust 小猪"));
+    assert!(approved_admin_html.contains("管理员自己的 Meme"));
+    assert!(approved_admin_html.contains("梗图用户"));
+    assert!(approved_admin_html.contains("已通过"));
+
+    let username_search_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/admin/memes?status=approved&q=meme_user")
+                .header(header::COOKIE, admin_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(username_search_response.status(), StatusCode::OK);
+    let username_search_html = response_html(username_search_response).await;
+    assert!(username_search_html.contains("Rust 小猪"));
+    assert!(!username_search_html.contains("管理员自己的 Meme"));
+
+    let tag_search_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/admin/memes?status=approved&q=rust")
+                .header(header::COOKIE, admin_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tag_search_response.status(), StatusCode::OK);
+    let tag_search_html = response_html(tag_search_response).await;
+    assert!(tag_search_html.contains("Rust 小猪"));
+    assert!(!tag_search_html.contains("管理员自己的 Meme"));
+    assert!(
+        tag_search_html
+            .contains("name=\"return_to\" value=\"/admin/memes?status=approved&#38;q=rust\"")
+    );
+
+    let admin_delete_body = format!(
+        "csrf_token={admin_csrf}&return_to=%2Fadmin%2Fmemes%3Fstatus%3Dapproved%26q%3Drust"
+    );
+    let delete_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/memes/{meme_id}/delete"))
+                .header(header::COOKIE, admin_cookie.clone())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(admin_delete_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        delete_response.headers().get(header::LOCATION).unwrap(),
+        "/admin/memes?status=approved&q=rust"
+    );
+
+    let deleted_status = sqlx::query_scalar::<_, String>("SELECT status FROM memes WHERE id = ?")
+        .bind(&meme_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(deleted_status, "deleted");
+
+    let deleted_public_response = router
+        .oneshot(
+            Request::builder()
+                .uri("/memes?tag=rust")
+                .header(header::COOKIE, admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let deleted_public_html = response_html(deleted_public_response).await;
+    assert!(!deleted_public_html.contains("Rust 小猪"));
+}
+
+#[tokio::test]
+async fn authors_can_delete_their_own_memes_but_not_someone_elses() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("meme-owner-delete.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let owner = auth::create_user(
+        &pool,
+        "meme_owner",
+        "Meme 作者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let other_user = auth::create_user(
+        &pool,
+        "other_meme_user",
+        "另一位用户",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let meme_id = memes::create(
+        &pool,
+        &owner,
+        NewMeme {
+            storage_name: "ownermeme.png".to_owned(),
+            media_type: "image/png".to_owned(),
+            title: "只属于作者的 Meme".to_owned(),
+            tags: vec!["测试".to_owned()],
+        },
+    )
+    .await
+    .unwrap();
+    let config = test_config(&temporary, database_url);
+    tokio::fs::create_dir_all(&config.memes.dir).await.unwrap();
+    tokio::fs::write(config.memes.dir.join("ownermeme.png"), tiny_png())
+        .await
+        .unwrap();
+    let router = app::build(pool.clone(), config);
+
+    let owner_cookie = sign_in(&router, &owner.username, "127.0.0.1:43105").await;
+    let (_, owner_csrf) = page_session_with_cookie(&router, "/profile", &owner_cookie).await;
+    let owner_profile = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/profile")
+                .header(header::COOKIE, owner_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        response_html(owner_profile)
+            .await
+            .contains("只属于作者的 Meme")
+    );
+    let own_pending_image = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/memes/{meme_id}/image"))
+                .header(header::COOKIE, owner_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(own_pending_image.status(), StatusCode::OK);
+
+    let other_cookie = sign_in(&router, &other_user.username, "127.0.0.1:43106").await;
+    let (_, other_csrf) = page_session_with_cookie(&router, "/profile", &other_cookie).await;
+    let other_delete_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/memes/{meme_id}/delete"))
+                .header(header::COOKIE, other_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={other_csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(other_delete_response.status(), StatusCode::NOT_FOUND);
+
+    let owner_delete_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/memes/{meme_id}/delete"))
+                .header(header::COOKIE, owner_cookie.clone())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={owner_csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(owner_delete_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        owner_delete_response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap(),
+        "/profile?updated=meme"
+    );
+
+    let status = sqlx::query_scalar::<_, String>("SELECT status FROM memes WHERE id = ?")
+        .bind(&meme_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "deleted");
+
+    let deleted_profile = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/profile")
+                .header(header::COOKIE, owner_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !response_html(deleted_profile)
+            .await
+            .contains("只属于作者的 Meme")
+    );
+    let deleted_image = router
+        .oneshot(
+            Request::builder()
+                .uri(format!("/memes/{meme_id}/image"))
+                .header(header::COOKIE, owner_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted_image.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn meme_wall_uses_numbered_pagination_with_previous_and_next_links() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("meme-numbered-pages.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let author = auth::create_user(
+        &pool,
+        "page_meme_author",
+        "分页作者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "page_meme_admin",
+        "分页管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    let newest = approved_meme(&pool, &author, &admin, "newest.png", "最新 Meme", 30).await;
+    let middle = approved_meme(&pool, &author, &admin, "middle.png", "中间 Meme", 20).await;
+    let oldest = approved_meme(&pool, &author, &admin, "oldest.png", "最早 Meme", 10).await;
+    assert_ne!(newest, middle);
+    assert_ne!(middle, oldest);
+    let mut config = test_config(&temporary, database_url);
+    config.memes.page_size = 2;
+    let router = app::build(pool, config);
+
+    let first_page = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/memes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_page.status(), StatusCode::OK);
+    let first_html = response_html(first_page).await;
+    assert!(first_html.contains("最新 Meme"));
+    assert!(first_html.contains("中间 Meme"));
+    assert!(!first_html.contains("最早 Meme"));
+    assert!(first_html.contains("第 1 页"));
+    assert!(first_html.contains("href=\"/memes?page=2\""));
+    assert!(!first_html.contains("加载更多"));
+
+    let second_page = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/memes?page=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_page.status(), StatusCode::OK);
+    let second_html = response_html(second_page).await;
+    assert!(!second_html.contains("最新 Meme"));
+    assert!(!second_html.contains("中间 Meme"));
+    assert!(second_html.contains("最早 Meme"));
+    assert!(second_html.contains("第 2 页"));
+    assert!(second_html.contains("href=\"/memes?page=1\""));
+
+    let tagged_second_page = router
+        .oneshot(
+            Request::builder()
+                .uri("/memes?tag=page&page=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tagged_second_page.status(), StatusCode::OK);
+    let tagged_second_html = response_html(tagged_second_page).await;
+    assert!(tagged_second_html.contains("最早 Meme"));
+    assert!(tagged_second_html.contains("href=\"/memes?tag=page&amp;page=1\""));
 }
 
 fn sqlite_url(path: &Path) -> String {
@@ -572,9 +917,10 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
         },
         memes: MemeConfig {
             dir: temporary.path().join("memes"),
-            max_upload_bytes: 5 * 1024 * 1024,
+            max_upload_bytes: 3 * 1024 * 1024,
             max_dimension: 3000,
             max_gif_frames: 120,
+            max_decoded_pixels: 50_000_000,
             page_size: 20,
             home_preview_limit: 6,
             max_tags_per_meme: 5,
@@ -706,6 +1052,36 @@ fn push_text_part(body: &mut Vec<u8>, name: &str, value: &str) {
     );
     body.extend_from_slice(value.as_bytes());
     body.extend_from_slice(b"\r\n");
+}
+
+async fn approved_meme(
+    pool: &sqlx::SqlitePool,
+    author: &User,
+    admin: &User,
+    storage_name: &str,
+    title: &str,
+    created_at_epoch: i64,
+) -> String {
+    let meme_id = memes::create(
+        pool,
+        author,
+        NewMeme {
+            storage_name: storage_name.to_owned(),
+            media_type: "image/png".to_owned(),
+            title: title.to_owned(),
+            tags: vec!["page".to_owned()],
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE memes SET created_at_epoch = ? WHERE id = ?")
+        .bind(created_at_epoch)
+        .bind(&meme_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    memes::approve(pool, &meme_id, admin).await.unwrap();
+    meme_id
 }
 
 fn tiny_png() -> Vec<u8> {

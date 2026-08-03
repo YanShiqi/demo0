@@ -145,6 +145,14 @@ body {
     text-decoration: none;
 }
 
+.preview-heading a.button {
+    color: #07110f;
+}
+
+.preview-heading a.button:hover {
+    color: #07110f;
+}
+
 .preview-scroll {
     display: grid;
     gap: 12px;
@@ -175,14 +183,16 @@ body {
     background: var(--teal-dark);
 }
 
-.button.secondary {
+.button.secondary,
+.small-button.secondary {
     color: var(--teal);
     background: transparent;
     border: 1px solid var(--teal);
     box-shadow: none;
 }
 
-.button.secondary:hover {
+.button.secondary:hover,
+.small-button.secondary:hover {
     color: #07110f;
     background: var(--teal);
 }
@@ -191,6 +201,13 @@ body {
     display: flex;
     gap: 12px;
     margin-top: 30px;
+}
+
+.status-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 18px;
 }
 
 .feature-grid,
@@ -486,6 +503,10 @@ small {
     border-radius: 16px;
 }
 
+.delete-meme-form {
+    margin-top: 14px;
+}
+
 .tag-list {
     display: flex;
     flex-wrap: wrap;
@@ -504,9 +525,22 @@ small {
     border-radius: 999px;
 }
 
-.load-more {
+.pagination {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    justify-content: center;
     margin-top: 26px;
     text-align: center;
+}
+
+.pagination.solo {
+    display: block;
+}
+
+.page-indicator {
+    color: var(--muted);
+    font-weight: 800;
 }
 
 .message-list.compact-list {

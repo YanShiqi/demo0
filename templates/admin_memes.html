@@ -3,8 +3,23 @@
 {% block content %}
 <section class="panel">
   <p class="eyebrow">ADMIN</p>
-  <h1>Meme 审核</h1>
+  <h1>Meme 管理</h1>
   <p class="muted">待审核内容通过后会公开展示；删除会软删除记录，第一版暂不立即物理删除图片。</p>
+  <nav class="status-tabs" aria-label="Meme 状态筛选">
+    <a class="small-button{% if pending_filter_active %}{% else %} secondary{% endif %}" href="/admin/memes">待审核</a>
+    <a class="small-button{% if approved_filter_active %}{% else %} secondary{% endif %}" href="/admin/memes?status=approved">已通过</a>
+  </nav>
+  <form class="filter-form" action="/admin/memes" method="get">
+    {% if approved_filter_active %}<input type="hidden" name="status" value="approved">{% endif %}
+    <label for="meme-admin-query">按标题、用户或标签搜索</label>
+    <div class="inline-controls">
+      <input id="meme-admin-query" name="q" value="{{ query }}" placeholder="例如：meme_user、梗图用户、rust">
+      <button type="submit">搜索</button>
+      {% if has_query %}
+        {% if approved_filter_active %}<a href="/admin/memes?status=approved">清除</a>{% else %}<a href="/admin/memes">清除</a>{% endif %}
+      {% endif %}
+    </div>
+  </form>
 </section>
 
 {% if has_memes %}
@@ -20,12 +35,15 @@
     </div>
     {% endif %}
     <div class="actions">
+      {% if meme.is_pending %}
       <form action="/admin/memes/{{ meme.id }}/approve" method="post">
         <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
         <button class="small-button" type="submit">通过</button>
       </form>
+      {% endif %}
       <form action="/admin/memes/{{ meme.id }}/delete" method="post">
         <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+        <input type="hidden" name="return_to" value="{{ return_to }}">
         <button class="small-button danger" type="submit">删除</button>
       </form>
     </div>
@@ -33,6 +51,6 @@
   {% endfor %}
 </section>
 {% else %}
-<section class="panel empty-state"><p>暂无需要处理的 Meme。</p></section>
+<section class="panel empty-state"><p>{{ empty_message }}</p></section>
 {% endif %}
 {% endblock %}

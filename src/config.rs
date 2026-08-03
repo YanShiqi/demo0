@@ -17,9 +17,10 @@ const DEFAULT_MESSAGE_PAGE_SIZE: i64 = 30;
 const DEFAULT_MESSAGE_HOME_PREVIEW_LIMIT: i64 = 5;
 const DEFAULT_MESSAGE_CLEANUP_INTERVAL_HOURS: u64 = 6;
 const DEFAULT_MEME_DIR: &str = "data/memes";
-const DEFAULT_MEME_MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024;
+const DEFAULT_MEME_MAX_UPLOAD_BYTES: usize = 3 * 1024 * 1024;
 const DEFAULT_MEME_MAX_DIMENSION: u32 = 3000;
 const DEFAULT_MEME_MAX_GIF_FRAMES: usize = 120;
+const DEFAULT_MEME_MAX_DECODED_PIXELS: u64 = 50_000_000;
 const DEFAULT_MEME_PAGE_SIZE: i64 = 20;
 const DEFAULT_MEME_HOME_PREVIEW_LIMIT: i64 = 6;
 const DEFAULT_MEME_MAX_TAGS_PER_MEME: usize = 5;
@@ -59,6 +60,7 @@ pub struct MemeConfig {
     pub max_upload_bytes: usize,
     pub max_dimension: u32,
     pub max_gif_frames: usize,
+    pub max_decoded_pixels: u64,
     pub page_size: i64,
     pub home_preview_limit: i64,
     pub max_tags_per_meme: usize,
@@ -142,6 +144,9 @@ impl MemeConfig {
         let max_gif_frames = parse_optional_env("MEME_MAX_GIF_FRAMES")?
             .or(file_config.max_gif_frames)
             .unwrap_or(DEFAULT_MEME_MAX_GIF_FRAMES);
+        let max_decoded_pixels = parse_optional_env("MEME_MAX_DECODED_PIXELS")?
+            .or(file_config.max_decoded_pixels)
+            .unwrap_or(DEFAULT_MEME_MAX_DECODED_PIXELS);
         let page_size = parse_optional_env("MEME_PAGE_SIZE")?
             .or(file_config.page_size)
             .unwrap_or(DEFAULT_MEME_PAGE_SIZE);
@@ -161,6 +166,7 @@ impl MemeConfig {
         anyhow::ensure!(max_upload_bytes > 0, "MEME_MAX_UPLOAD_BYTES 必须大于 0");
         anyhow::ensure!(max_dimension > 0, "MEME_MAX_DIMENSION 必须大于 0");
         anyhow::ensure!(max_gif_frames > 0, "MEME_MAX_GIF_FRAMES 必须大于 0");
+        anyhow::ensure!(max_decoded_pixels > 0, "MEME_MAX_DECODED_PIXELS 必须大于 0");
         anyhow::ensure!(page_size > 0, "MEME_PAGE_SIZE 必须大于 0");
         anyhow::ensure!(home_preview_limit > 0, "MEME_HOME_PREVIEW_LIMIT 必须大于 0");
         anyhow::ensure!(max_tags_per_meme > 0, "MEME_MAX_TAGS_PER_MEME 必须大于 0");
@@ -172,6 +178,7 @@ impl MemeConfig {
             max_upload_bytes,
             max_dimension,
             max_gif_frames,
+            max_decoded_pixels,
             page_size,
             home_preview_limit,
             max_tags_per_meme,
@@ -304,6 +311,7 @@ struct MemeFileConfig {
     max_upload_bytes: Option<usize>,
     max_dimension: Option<u32>,
     max_gif_frames: Option<usize>,
+    max_decoded_pixels: Option<u64>,
     page_size: Option<i64>,
     home_preview_limit: Option<i64>,
     max_tags_per_meme: Option<usize>,

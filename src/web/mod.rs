@@ -57,6 +57,12 @@ pub struct DeleteMessageForm {
 }
 
 #[derive(Deserialize)]
+pub struct DeleteMemeForm {
+    csrf_token: String,
+    return_to: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct MessageForm {
     csrf_token: String,
     body: String,
@@ -65,7 +71,13 @@ pub struct MessageForm {
 #[derive(Deserialize, Default)]
 pub struct MemeQuery {
     tag: Option<String>,
-    cursor: Option<String>,
+    page: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct AdminMemeQuery {
+    status: Option<String>,
+    q: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -103,7 +115,7 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> Result<R
     .map(|message| home_message_view(message, state.config.display.utc_offset_hours))
     .collect();
     let has_messages = !messages.is_empty();
-    let memes: Vec<MemeView> = memes::list_approved(&state.pool, None, None, &state.config.memes)
+    let memes: Vec<MemeView> = memes::list_approved(&state.pool, None, 1, &state.config.memes)
         .await?
         .items
         .into_iter()
@@ -327,7 +339,7 @@ pub async fn memes_page(
     let page = memes::list_approved(
         &state.pool,
         query.tag.as_deref(),
-        query.cursor.as_deref(),
+        query.page.unwrap_or(1),
         &state.config.memes,
     )
     .await?;
@@ -345,8 +357,11 @@ pub async fn memes_page(
             has_memes,
             has_tag: !tag.trim().is_empty(),
             tag,
-            has_next_cursor: page.next_cursor.is_some(),
-            next_cursor: page.next_cursor.unwrap_or_default(),
+            current_page: page.current_page,
+            has_previous_page: page.previous_page.is_some(),
+            previous_page: page.previous_page.unwrap_or_default(),
+            has_next_page: page.next_page.is_some(),
+            next_page: page.next_page.unwrap_or_default(),
             page_size: state.config.memes.page_size,
         },
         StatusCode::OK,
@@ -480,34 +495,56 @@ pub async fn meme_image(
     Path(meme_id): Path<String>,
 ) -> Result<Response, AppError> {
     let (_, user, _) = page_context(&state, &headers).await?;
-    let can_view_pending =
-        user.is_some_and(|user| matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin));
     let (storage_name, media_type) =
-        memes::image_info(&state.pool, &meme_id, can_view_pending).await?;
+        memes::image_info(&state.pool, &meme_id, user.as_ref()).await?;
     if !safe_storage_name(&storage_name) {
         return Err(AppError::NotFound);
     }
     let bytes = tokio::fs::read(state.config.memes.dir.join(storage_name)).await?;
-    binary_response(bytes, &media_type, "public, max-age=300")
+    // 删除后的图片不应继续被浏览器缓存，避免个人页仍短暂显示旧内容。
+    binary_response(bytes, &media_type, "no-store")
 }
 
 pub async fn admin_memes(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<AdminMemeQuery>,
 ) -> Result<Response, AppError> {
     let session = auth::require_session(&state.pool, &headers).await?;
     let actor = require_admin(&state, &session).await?;
-    let memes: Vec<MemeView> = memes::list_for_admin(&state.pool)
-        .await?
-        .into_iter()
-        .map(|meme| meme_view(meme, state.config.display.utc_offset_hours))
-        .collect();
+    let status_filter = memes::AdminMemeStatus::from_query(query.status.as_deref())?;
+    let search_query = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default()
+        .to_owned();
+    let memes: Vec<MemeView> = memes::list_for_admin(
+        &state.pool,
+        status_filter,
+        query.q.as_deref(),
+        state.config.memes.page_size,
+    )
+    .await?
+    .into_iter()
+    .map(|meme| meme_view(meme, state.config.display.utc_offset_hours))
+    .collect();
     let has_memes = !memes.is_empty();
     render(
         AdminMemesTemplate {
             ctx: PageContext::authenticated(session.csrf_token, &actor),
             memes,
             has_memes,
+            pending_filter_active: status_filter.is_pending(),
+            approved_filter_active: status_filter.is_approved(),
+            empty_message: status_filter.empty_message(),
+            query: search_query,
+            has_query: query
+                .q
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty()),
+            return_to: admin_memes_return_to(status_filter, query.q.as_deref()),
         },
         StatusCode::OK,
         None,
@@ -531,13 +568,26 @@ pub async fn delete_meme(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(meme_id): Path<String>,
-    Form(form): Form<CsrfForm>,
+    Form(form): Form<DeleteMemeForm>,
 ) -> Result<Response, AppError> {
     let session = auth::require_session(&state.pool, &headers).await?;
     let actor = require_admin(&state, &session).await?;
     auth::verify_csrf(&session, &form.csrf_token)?;
     memes::mark_deleted(&state.pool, &meme_id, &actor).await?;
-    redirect("/admin/memes", None)
+    redirect(admin_meme_return_to(form.return_to.as_deref()), None)
+}
+
+pub async fn delete_own_meme(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(meme_id): Path<String>,
+    Form(form): Form<CsrfForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    let user = require_user(&state, &session).await?;
+    memes::mark_deleted_by_author(&state.pool, &meme_id, &user).await?;
+    redirect("/profile?updated=meme", None)
 }
 
 pub async fn profile_page(
@@ -551,6 +601,7 @@ pub async fn profile_page(
         Some("nickname") => "昵称已更新",
         Some("bio") => "个人简介已更新",
         Some("avatar") => "头像已更新",
+        Some("meme") => "Meme 已删除",
         _ => "",
     };
     render_profile(
@@ -916,6 +967,12 @@ async fn render_profile(
             .map(|message| message_view(message, Some(user), state.config.display.utc_offset_hours))
             .collect();
     let has_messages = !messages.is_empty();
+    let memes: Vec<MemeView> = memes::list_by_author(&state.pool, &user.id)
+        .await?
+        .into_iter()
+        .map(|meme| meme_view(meme, state.config.display.utc_offset_hours))
+        .collect();
+    let has_memes = !memes.is_empty();
     render(
         ProfileTemplate {
             ctx: PageContext::authenticated(session.csrf_token.clone(), user),
@@ -931,6 +988,8 @@ async fn render_profile(
             messages,
             has_messages,
             retention_days: state.config.messages.retention_days,
+            memes,
+            has_memes,
         },
         if error.is_some() {
             StatusCode::BAD_REQUEST
@@ -1052,6 +1111,7 @@ fn meme_view(meme: MemeWithTags, utc_offset_hours: i8) -> MemeView {
         username: meme.row.username,
         nickname: meme.row.nickname,
         title: meme.row.title,
+        is_pending: meme.row.status == memes::STATUS_PENDING,
         status_label,
         created_at: time_display::friendly_rfc3339(&meme.row.created_at, utc_offset_hours),
         has_tags: !meme.tags.is_empty(),
@@ -1073,6 +1133,45 @@ fn delete_return_to(value: Option<&str>) -> &'static str {
         Some("/profile") => "/profile",
         _ => "/messages",
     }
+}
+
+fn admin_meme_return_to(value: Option<&str>) -> &str {
+    match value {
+        Some(value) if value == "/admin/memes" || value.starts_with("/admin/memes?") => value,
+        _ => "/admin/memes",
+    }
+}
+
+fn admin_memes_return_to(status_filter: memes::AdminMemeStatus, query: Option<&str>) -> String {
+    let query = query.map(str::trim).filter(|value| !value.is_empty());
+    let mut return_to = "/admin/memes".to_owned();
+    let mut separator = '?';
+    if status_filter.is_approved() {
+        return_to.push(separator);
+        return_to.push_str("status=approved");
+        separator = '&';
+    }
+    if let Some(query) = query {
+        return_to.push(separator);
+        return_to.push_str("q=");
+        return_to.push_str(&percent_encode_query_value(query));
+    }
+    return_to
+}
+
+fn percent_encode_query_value(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push('%');
+            encoded.push(HEX[(byte >> 4) as usize] as char);
+            encoded.push(HEX[(byte & 0x0F) as usize] as char);
+        }
+    }
+    encoded
 }
 
 fn render<T: Template>(

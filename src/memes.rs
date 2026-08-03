@@ -1,8 +1,7 @@
 use std::io::Cursor;
 
 use image::{
-    AnimationDecoder, GenericImageView, ImageDecoder, ImageFormat,
-    codecs::gif::{GifDecoder, GifEncoder, Repeat},
+    AnimationDecoder, GenericImageView, ImageDecoder, ImageFormat, codecs::gif::GifDecoder,
 };
 use sqlx::{FromRow, SqlitePool, sqlite::SqliteQueryResult};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -19,6 +18,45 @@ use crate::{
 pub const STATUS_PENDING: &str = "pending";
 pub const STATUS_APPROVED: &str = "approved";
 pub const STATUS_DELETED: &str = "deleted";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdminMemeStatus {
+    Pending,
+    Approved,
+}
+
+impl AdminMemeStatus {
+    /// 将后台状态筛选限制在可管理范围内，避免页面参数直接拼接进 SQL。
+    pub fn from_query(value: Option<&str>) -> Result<Self, AppError> {
+        match value.unwrap_or(STATUS_PENDING) {
+            STATUS_PENDING => Ok(Self::Pending),
+            STATUS_APPROVED => Ok(Self::Approved),
+            _ => Err(AppError::BadRequest("未知的 Meme 状态筛选".to_owned())),
+        }
+    }
+
+    pub const fn database_status(self) -> &'static str {
+        match self {
+            Self::Pending => STATUS_PENDING,
+            Self::Approved => STATUS_APPROVED,
+        }
+    }
+
+    pub const fn is_pending(self) -> bool {
+        matches!(self, Self::Pending)
+    }
+
+    pub const fn is_approved(self) -> bool {
+        matches!(self, Self::Approved)
+    }
+
+    pub const fn empty_message(self) -> &'static str {
+        match self {
+            Self::Pending => "暂无需要处理的 Meme。",
+            Self::Approved => "暂无已通过的 Meme。",
+        }
+    }
+}
 
 #[derive(Clone, Debug, FromRow)]
 pub struct MemeRow {
@@ -45,7 +83,9 @@ pub struct MemeWithTags {
 #[derive(Clone, Debug)]
 pub struct MemePage {
     pub items: Vec<MemeWithTags>,
-    pub next_cursor: Option<String>,
+    pub current_page: i64,
+    pub previous_page: Option<i64>,
+    pub next_page: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -183,62 +223,83 @@ pub async fn create(
 pub async fn list_approved(
     pool: &SqlitePool,
     tag: Option<&str>,
-    cursor: Option<&str>,
+    page: i64,
     config: &MemeConfig,
 ) -> Result<MemePage, AppError> {
+    if page < 1 {
+        return Err(AppError::BadRequest("页码必须大于 0".to_owned()));
+    }
     let query_limit = config.page_size + 1;
-    let cursor = cursor.map(parse_cursor).transpose()?;
+    let offset = (page - 1)
+        .checked_mul(config.page_size)
+        .ok_or_else(|| AppError::BadRequest("页码过大".to_owned()))?;
     let tag_key = tag
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(tag_key);
 
-    let rows = match (tag_key.as_deref(), cursor) {
-        (Some(tag_key), Some((cursor_epoch, cursor_id))) => sqlx::query_as::<_, MemeRow>(
-            "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id JOIN meme_tag_links ON meme_tag_links.meme_id = memes.id JOIN meme_tags ON meme_tags.id = meme_tag_links.tag_id WHERE memes.status = ? AND meme_tags.name_key = ? AND (memes.created_at_epoch < ? OR (memes.created_at_epoch = ? AND memes.id < ?)) ORDER BY memes.created_at_epoch DESC, memes.id DESC LIMIT ?",
-        )
-        .bind(STATUS_APPROVED)
-        .bind(tag_key)
-        .bind(cursor_epoch)
-        .bind(cursor_epoch)
-        .bind(cursor_id)
-        .bind(query_limit)
-        .fetch_all(pool)
-        .await?,
-        (Some(tag_key), None) => sqlx::query_as::<_, MemeRow>(
-            "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id JOIN meme_tag_links ON meme_tag_links.meme_id = memes.id JOIN meme_tags ON meme_tags.id = meme_tag_links.tag_id WHERE memes.status = ? AND meme_tags.name_key = ? ORDER BY memes.created_at_epoch DESC, memes.id DESC LIMIT ?",
+    let rows = match tag_key.as_deref() {
+        Some(tag_key) => sqlx::query_as::<_, MemeRow>(
+            "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id JOIN meme_tag_links ON meme_tag_links.meme_id = memes.id JOIN meme_tags ON meme_tags.id = meme_tag_links.tag_id WHERE memes.status = ? AND meme_tags.name_key = ? ORDER BY memes.created_at_epoch DESC, memes.id DESC LIMIT ? OFFSET ?",
         )
         .bind(STATUS_APPROVED)
         .bind(tag_key)
         .bind(query_limit)
+        .bind(offset)
         .fetch_all(pool)
         .await?,
-        (None, Some((cursor_epoch, cursor_id))) => sqlx::query_as::<_, MemeRow>(
-            "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.status = ? AND (memes.created_at_epoch < ? OR (memes.created_at_epoch = ? AND memes.id < ?)) ORDER BY memes.created_at_epoch DESC, memes.id DESC LIMIT ?",
-        )
-        .bind(STATUS_APPROVED)
-        .bind(cursor_epoch)
-        .bind(cursor_epoch)
-        .bind(cursor_id)
-        .bind(query_limit)
-        .fetch_all(pool)
-        .await?,
-        (None, None) => sqlx::query_as::<_, MemeRow>(
-            "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.status = ? ORDER BY memes.created_at_epoch DESC, memes.id DESC LIMIT ?",
+        None => sqlx::query_as::<_, MemeRow>(
+            "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.status = ? ORDER BY memes.created_at_epoch DESC, memes.id DESC LIMIT ? OFFSET ?",
         )
         .bind(STATUS_APPROVED)
         .bind(query_limit)
+        .bind(offset)
         .fetch_all(pool)
         .await?,
     };
-    page_from_rows(pool, rows, config.page_size as usize).await
+    page_from_rows(pool, rows, config.page_size as usize, page).await
 }
 
-pub async fn list_for_admin(pool: &SqlitePool) -> Result<Vec<MemeWithTags>, AppError> {
+pub async fn list_for_admin(
+    pool: &SqlitePool,
+    status: AdminMemeStatus,
+    query: Option<&str>,
+    page_size: i64,
+) -> Result<Vec<MemeWithTags>, AppError> {
+    let rows = if let Some(pattern) = admin_search_pattern(query) {
+        sqlx::query_as::<_, MemeRow>(
+            "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.status = ? AND (LOWER(memes.title) LIKE ? ESCAPE '\\' OR users.username_key LIKE ? ESCAPE '\\' OR users.nickname_key LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM meme_tag_links JOIN meme_tags ON meme_tags.id = meme_tag_links.tag_id WHERE meme_tag_links.meme_id = memes.id AND meme_tags.name_key LIKE ? ESCAPE '\\')) ORDER BY memes.created_at_epoch DESC, memes.id DESC LIMIT ?",
+        )
+        .bind(status.database_status())
+        .bind(&pattern)
+        .bind(&pattern)
+        .bind(&pattern)
+        .bind(&pattern)
+        .bind(page_size)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, MemeRow>(
+            "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.status = ? ORDER BY memes.created_at_epoch DESC, memes.id DESC LIMIT ?",
+        )
+        .bind(status.database_status())
+        .bind(page_size)
+        .fetch_all(pool)
+        .await?
+    };
+    attach_tags(pool, rows).await
+}
+
+/// 返回指定作者仍可管理的 Meme，包含待审核和已通过状态。
+pub async fn list_by_author(
+    pool: &SqlitePool,
+    author_user_id: &str,
+) -> Result<Vec<MemeWithTags>, AppError> {
     let rows = sqlx::query_as::<_, MemeRow>(
-        "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.status = ? ORDER BY memes.created_at_epoch DESC, memes.id DESC",
+        "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.author_user_id = ? AND memes.status <> ? ORDER BY memes.created_at_epoch DESC, memes.id DESC",
     )
-    .bind(STATUS_PENDING)
+    .bind(author_user_id)
+    .bind(STATUS_DELETED)
     .fetch_all(pool)
     .await?;
     attach_tags(pool, rows).await
@@ -270,33 +331,68 @@ pub async fn mark_deleted(
     reviewer: &User,
 ) -> Result<SqliteQueryResult, AppError> {
     ensure_admin(reviewer)?;
-    let reviewed_at = OffsetDateTime::now_utc()
+    let deleted_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|error| AppError::Internal(format!("格式化 Meme 删除时间失败：{error}")))?;
-    let result =
-        sqlx::query("UPDATE memes SET status = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?")
-            .bind(STATUS_DELETED)
-            .bind(reviewed_at)
-            .bind(&reviewer.id)
-            .bind(meme_id)
-            .execute(pool)
-            .await?;
+    let result = sqlx::query(
+        "UPDATE memes SET status = ?, deleted_at = ?, deleted_by = ? WHERE id = ? AND status <> ?",
+    )
+    .bind(STATUS_DELETED)
+    .bind(deleted_at)
+    .bind(&reviewer.id)
+    .bind(meme_id)
+    .bind(STATUS_DELETED)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(result)
+}
+
+/// 仅允许作者软删除自己仍可见的 Meme，未命中统一视为不存在。
+pub async fn mark_deleted_by_author(
+    pool: &SqlitePool,
+    meme_id: &str,
+    author: &User,
+) -> Result<SqliteQueryResult, AppError> {
+    let deleted_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| AppError::Internal(format!("格式化 Meme 删除时间失败：{error}")))?;
+    let result = sqlx::query(
+        "UPDATE memes SET status = ?, deleted_at = ?, deleted_by = ? WHERE id = ? AND author_user_id = ? AND status <> ?",
+    )
+    .bind(STATUS_DELETED)
+    .bind(deleted_at)
+    .bind(&author.id)
+    .bind(meme_id)
+    .bind(&author.id)
+    .bind(STATUS_DELETED)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
     Ok(result)
 }
 
 pub async fn image_info(
     pool: &SqlitePool,
     meme_id: &str,
-    can_view_pending: bool,
+    viewer: Option<&User>,
 ) -> Result<(String, String), AppError> {
-    let (storage_name, media_type, status) = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT storage_name, media_type, status FROM memes WHERE id = ?",
-    )
-    .bind(meme_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-    if status == STATUS_APPROVED || (can_view_pending && status != STATUS_DELETED) {
+    let (storage_name, media_type, status, author_user_id) =
+        sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT storage_name, media_type, status, author_user_id FROM memes WHERE id = ?",
+        )
+        .bind(meme_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let can_view_unapproved = viewer.is_some_and(|user| {
+        user.id == author_user_id || matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin)
+    });
+    if status == STATUS_APPROVED || (can_view_unapproved && status != STATUS_DELETED) {
         Ok((storage_name, media_type))
     } else {
         Err(AppError::NotFound)
@@ -331,7 +427,7 @@ fn process_static(
 }
 
 fn process_gif(bytes: Vec<u8>, config: &MemeConfig) -> Result<ProcessedMeme, AppError> {
-    let decoder = GifDecoder::new(Cursor::new(bytes))
+    let decoder = GifDecoder::new(Cursor::new(bytes.as_slice()))
         .map_err(|_| AppError::BadRequest("GIF 已损坏或格式不正确".to_owned()))?;
     let (width, height) = decoder.dimensions();
     validate_dimensions(width, height, 1, config)?;
@@ -352,21 +448,10 @@ fn process_gif(bytes: Vec<u8>, config: &MemeConfig) -> Result<ProcessedMeme, App
         return Err(AppError::BadRequest("GIF 不包含有效画面".to_owned()));
     }
 
-    // GIF 第一版保留动画，只做重新编码和限制校验，不做裁剪压缩参数调节。
     let frame_count = frames.len();
-    let mut output = Vec::new();
-    {
-        let mut encoder = GifEncoder::new(&mut output);
-        encoder
-            .set_repeat(Repeat::Infinite)
-            .map_err(|error| AppError::Internal(format!("GIF 循环设置失败：{error}")))?;
-        encoder
-            .encode_frames(frames)
-            .map_err(|error| AppError::Internal(format!("GIF 重新编码失败：{error}")))?;
-    }
-
+    // GIF 重新编码非常耗时；第一版只做格式、帧数和解码像素校验，保留原动画文件。
     Ok(ProcessedMeme {
-        bytes: output,
+        bytes,
         extension: "gif",
         media_type: "image/gif",
         width,
@@ -387,13 +472,10 @@ fn validate_dimensions(
             config.max_dimension, config.max_dimension
         )));
     }
-    let max_decoded_pixels = u64::from(config.max_dimension)
-        .saturating_mul(u64::from(config.max_dimension))
-        .saturating_mul(config.max_gif_frames as u64);
     let decoded_pixels = u64::from(width)
         .saturating_mul(u64::from(height))
         .saturating_mul(frames as u64);
-    if decoded_pixels > max_decoded_pixels {
+    if decoded_pixels > config.max_decoded_pixels {
         return Err(AppError::BadRequest(
             "GIF 解码后的总像素过大，请减少尺寸或帧数".to_owned(),
         ));
@@ -438,15 +520,26 @@ async fn page_from_rows(
     pool: &SqlitePool,
     mut rows: Vec<MemeRow>,
     page_size: usize,
+    current_page: i64,
 ) -> Result<MemePage, AppError> {
-    let next_cursor = if rows.len() > page_size {
-        let extra = rows.pop().expect("多取一条时应存在 cursor 来源");
-        Some(format!("{}:{}", extra.created_at_epoch, extra.id))
+    let next_page = if rows.len() > page_size {
+        rows.pop().expect("多取一条时应存在下一页判断来源");
+        Some(current_page + 1)
+    } else {
+        None
+    };
+    let previous_page = if current_page > 1 {
+        Some(current_page - 1)
     } else {
         None
     };
     let items = attach_tags(pool, rows).await?;
-    Ok(MemePage { items, next_cursor })
+    Ok(MemePage {
+        items,
+        current_page,
+        previous_page,
+        next_page,
+    })
 }
 
 async fn attach_tags(pool: &SqlitePool, rows: Vec<MemeRow>) -> Result<Vec<MemeWithTags>, AppError> {
@@ -463,21 +556,28 @@ async fn attach_tags(pool: &SqlitePool, rows: Vec<MemeRow>) -> Result<Vec<MemeWi
     Ok(items)
 }
 
-fn parse_cursor(cursor: &str) -> Result<(i64, String), AppError> {
-    let (epoch, id) = cursor
-        .split_once(':')
-        .ok_or_else(|| AppError::BadRequest("分页参数无效".to_owned()))?;
-    let epoch = epoch
-        .parse::<i64>()
-        .map_err(|_| AppError::BadRequest("分页参数无效".to_owned()))?;
-    if id.is_empty() {
-        return Err(AppError::BadRequest("分页参数无效".to_owned()));
-    }
-    Ok((epoch, id.to_owned()))
-}
-
 fn tag_key(tag: &str) -> String {
     tag.nfkc().collect::<String>().to_lowercase()
+}
+
+fn admin_search_pattern(query: Option<&str>) -> Option<String> {
+    let query = query?.trim();
+    if query.is_empty() {
+        return None;
+    }
+    let normalized = query.nfkc().collect::<String>().to_lowercase();
+    Some(format!("%{}%", escape_like_pattern(&normalized)))
+}
+
+fn escape_like_pattern(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if matches!(character, '\\' | '%' | '_') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 fn ensure_admin(user: &User) -> Result<(), AppError> {
@@ -492,4 +592,64 @@ fn is_unique_violation(error: &sqlx::Error) -> bool {
     error
         .as_database_error()
         .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use image::{
+        Delay, Frame, ImageBuffer, Rgba,
+        codecs::gif::{GifEncoder, Repeat},
+    };
+
+    use super::*;
+
+    #[test]
+    fn rejects_gif_when_decoded_pixels_exceed_configured_limit() {
+        let mut config = test_config();
+        config.max_decoded_pixels = 8;
+        let error = process_image(test_gif(2, 2, 3), &config).unwrap_err();
+        assert!(error.to_string().contains("总像素过大"));
+    }
+
+    #[test]
+    fn keeps_original_gif_bytes_after_validation() {
+        let config = test_config();
+        let bytes = test_gif(2, 2, 2);
+        let processed = process_image(bytes.clone(), &config).unwrap();
+        assert_eq!(processed.media_type, "image/gif");
+        assert_eq!(processed.frame_count, 2);
+        assert_eq!(processed.bytes, bytes);
+    }
+
+    fn test_config() -> MemeConfig {
+        MemeConfig {
+            dir: PathBuf::from("data/memes"),
+            max_upload_bytes: 3 * 1024 * 1024,
+            max_dimension: 3000,
+            max_gif_frames: 120,
+            max_decoded_pixels: 50_000_000,
+            page_size: 20,
+            home_preview_limit: 6,
+            max_tags_per_meme: 5,
+            max_tag_length: 20,
+            max_title_length: 60,
+        }
+    }
+
+    fn test_gif(width: u32, height: u32, frames: usize) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = GifEncoder::new(&mut encoded);
+            encoder.set_repeat(Repeat::Infinite).unwrap();
+            for index in 0..frames {
+                let pixel = Rgba([index as u8, 64, 128, 255]);
+                let image = ImageBuffer::from_pixel(width, height, pixel);
+                let frame = Frame::from_parts(image, 0, 0, Delay::from_numer_denom_ms(80, 1));
+                encoder.encode_frame(frame).unwrap();
+            }
+        }
+        encoded
+    }
 }

@@ -37,16 +37,18 @@ cleanup_interval_hours = 6
 [memes]
 # Meme 图片和 GIF 的存储目录；目录内容属于运行数据，不提交到 Git。
 dir = "data/memes"
-# 单个 Meme 上传最大体积；第一版使用 5 MiB，避免 GIF 过大拖慢页面。
-max_upload_bytes = 5242880
+# 单个 Meme 上传最大体积；第一版使用 3 MiB，避免 GIF 过大拖慢页面。
+max_upload_bytes = 3145728
 # Meme 图片允许的最大宽高；超过后会拒绝上传。
 max_dimension = 3000
 # GIF 允许的最大帧数；过高会增加解码和浏览器播放压力。
 max_gif_frames = 120
-# Meme 展示墙每页最多返回数量；前端通过加载更多继续翻页。
+# GIF 解码后的最大总像素数；用于拦截小体积但解码很重的动图。
+max_decoded_pixels = 50000000
+# Meme 展示墙每页最多返回数量；前端通过页码前后翻页。
 page_size = 20
 # 首页 Meme 预览最多展示数量。
-home_preview_limit = 6
+home_preview_limit = 8
 # 每个 Meme 最多可绑定的标签数量。
 max_tags_per_meme = 5
 # 单个标签最大可见字符数；支持中文和 emoji。
