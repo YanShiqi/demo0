@@ -6,8 +6,9 @@ use askama::Template;
 use axum::{
     Form,
     body::Body,
-    extract::{ConnectInfo, Multipart, Path, Query, State},
+    extract::{ConnectInfo, Multipart, Path, Query, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
+    middleware::Next,
     response::{Html, IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
@@ -25,8 +26,8 @@ use crate::{
 };
 use views::{
     AdminMemesTemplate, AdminUserView, AdminUsersTemplate, HomeTemplate, LoginTemplate, MemeView,
-    MemesTemplate, MessageView, MessagesTemplate, NewMemeTemplate, PopularTagView, ProfileTemplate,
-    PublicProfileTemplate, RegisterTemplate,
+    MemesTemplate, MessageView, MessagesTemplate, NewMemeTemplate, PasswordChangeRequiredTemplate,
+    PopularTagView, ProfileTemplate, PublicProfileTemplate, RegisterTemplate,
 };
 
 #[derive(Deserialize)]
@@ -48,6 +49,13 @@ pub struct LoginForm {
 #[derive(Deserialize)]
 pub struct CsrfForm {
     csrf_token: String,
+}
+
+#[derive(Deserialize)]
+pub struct PasswordChangeForm {
+    csrf_token: String,
+    password: String,
+    password_confirmation: String,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +86,11 @@ pub struct MemeQuery {
 pub struct AdminMemeQuery {
     status: Option<String>,
     q: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct AdminUsersQuery {
+    password_reset: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -269,7 +282,52 @@ pub async fn login(
     };
     state.login_limiter.clear(&login_key).await;
     let cookie = auth::sign_in(&state.pool, &state.config, &session, &user.id).await?;
+    if user.must_change_password {
+        return redirect("/password/change-required", Some(cookie));
+    }
     redirect("/profile", Some(cookie))
+}
+
+pub async fn change_password_required_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let user = require_user(&state, &session).await?;
+    if !user.must_change_password {
+        return redirect("/profile", None);
+    }
+    render_password_change_required(&session, &user, None, StatusCode::OK)
+}
+
+pub async fn change_required_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<PasswordChangeForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    let user = require_user(&state, &session).await?;
+    if !user.must_change_password {
+        return redirect("/profile", None);
+    }
+    match auth::change_required_password(
+        &state.pool,
+        &user,
+        &form.password,
+        &form.password_confirmation,
+    )
+    .await
+    {
+        Ok(()) => redirect("/profile", None),
+        Err(AppError::BadRequest(message)) => render_password_change_required(
+            &session,
+            &user,
+            Some(&message),
+            StatusCode::BAD_REQUEST,
+        ),
+        Err(error) => Err(error),
+    }
 }
 
 pub async fn logout(
@@ -838,6 +896,7 @@ pub async fn user_avatar(
 pub async fn admin_users(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<AdminUsersQuery>,
 ) -> Result<Response, AppError> {
     let session = auth::require_session(&state.pool, &headers).await?;
     let actor = require_super_admin(&state, &session).await?;
@@ -854,16 +913,26 @@ pub async fn admin_users(
                 role_label: role.label(),
                 can_change: role != Role::SuperAdmin,
                 is_admin: role == Role::Admin,
+                must_change_password: user.must_change_password,
             }
         })
         .collect();
     let ctx = PageContext::authenticated(session.csrf_token, &actor);
+    let reset_user = query
+        .password_reset
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     render(
         AdminUsersTemplate {
             ctx,
             users,
-            has_message: false,
-            message: String::new(),
+            has_message: reset_user.is_some(),
+            message: reset_user
+                .map(|username| {
+                    format!("已将 {username} 的密码重置为用户名，并要求其下次登录修改密码")
+                })
+                .unwrap_or_default(),
         },
         StatusCode::OK,
         None,
@@ -915,6 +984,25 @@ pub async fn update_role(
     redirect("/admin/users", None)
 }
 
+pub async fn reset_user_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(target_id): Path<String>,
+    Form(form): Form<CsrfForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let actor = require_super_admin(&state, &session).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    let target = auth::reset_password_to_username(&state.pool, &actor, &target_id).await?;
+    redirect(
+        &format!(
+            "/admin/users?password_reset={}",
+            percent_encode_query_value(&target.username)
+        ),
+        None,
+    )
+}
+
 pub async fn app_css() -> Response {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
@@ -925,6 +1013,32 @@ pub async fn app_css() -> Response {
 
 pub async fn not_found() -> impl IntoResponse {
     (StatusCode::NOT_FOUND, "页面不存在")
+}
+
+pub async fn enforce_required_password_change(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Result<Response, AppError> {
+    let path = request.uri().path().to_owned();
+    if password_change_required_allowed_path(&path) {
+        return Ok(next.run(request).await);
+    }
+    if auth::current_user_from_headers(&state.pool, request.headers())
+        .await?
+        .is_some_and(|user| user.must_change_password)
+    {
+        return redirect("/password/change-required", None);
+    }
+    Ok(next.run(request).await)
+}
+
+fn password_change_required_allowed_path(path: &str) -> bool {
+    path == "/password/change-required"
+        || path == "/logout"
+        || path == "/static/app.css"
+        || (path.starts_with("/users/") && path.ends_with("/avatar"))
+        || (path.starts_with("/memes/") && path.ends_with("/image"))
 }
 
 async fn page_context(
@@ -960,6 +1074,23 @@ async fn require_admin(state: &AppState, session: &SessionRow) -> Result<User, A
         return Err(AppError::Forbidden);
     }
     Ok(user)
+}
+
+fn render_password_change_required(
+    session: &SessionRow,
+    user: &User,
+    error: Option<&str>,
+    status: StatusCode,
+) -> Result<Response, AppError> {
+    render(
+        PasswordChangeRequiredTemplate {
+            ctx: PageContext::authenticated(session.csrf_token.clone(), user),
+            has_error: error.is_some(),
+            error: error.unwrap_or_default().to_owned(),
+        },
+        status,
+        None,
+    )
 }
 
 async fn render_profile(

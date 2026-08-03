@@ -33,6 +33,14 @@ pub struct LoginTemplate {
     pub username: String,
 }
 
+#[derive(Template)]
+#[template(path = "password_change_required.html")]
+pub struct PasswordChangeRequiredTemplate {
+    pub ctx: PageContext,
+    pub has_error: bool,
+    pub error: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct MessageView {
     pub id: String,
@@ -168,6 +176,7 @@ pub struct AdminUserView {
     pub role_label: &'static str,
     pub can_change: bool,
     pub is_admin: bool,
+    pub must_change_password: bool,
 }
 
 #[derive(Template)]

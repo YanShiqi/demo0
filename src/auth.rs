@@ -107,7 +107,7 @@ pub fn validate_password_confirmation(
     Ok(())
 }
 
-fn validate_password(password: &str) -> Result<(), AppError> {
+pub fn validate_password(password: &str) -> Result<(), AppError> {
     let length = password.chars().count();
     if !(12..=128).contains(&length) {
         return Err(AppError::BadRequest(
@@ -207,6 +207,82 @@ pub async fn authenticate(
     Ok(valid.then_some(user))
 }
 
+pub async fn reset_password_to_username(
+    pool: &SqlitePool,
+    actor: &User,
+    target_id: &str,
+) -> Result<User, AppError> {
+    if actor.parsed_role() != Role::SuperAdmin {
+        return Err(AppError::Forbidden);
+    }
+
+    let mut transaction = pool.begin().await?;
+    let target = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
+        .bind(target_id)
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if target.parsed_role() == Role::SuperAdmin {
+        return Err(AppError::Forbidden);
+    }
+
+    let temporary_password = target.username.clone();
+    let password_hash = tokio::task::spawn_blocking(move || hash_password(&temporary_password))
+        .await
+        .map_err(|error| AppError::Internal(format!("密码任务异常：{error}")))??;
+    let now = now_string()?;
+    // 临时密码只用于找回入口，正式使用前必须由用户重新设置强密码。
+    sqlx::query(
+        "UPDATE users SET password_hash = ?, must_change_password = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(password_hash)
+    .bind(true)
+    .bind(&now)
+    .bind(&target.id)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        "INSERT INTO password_reset_audit_logs (id, actor_user_id, target_user_id, created_at) VALUES (?, ?, ?, ?)",
+    )
+    .bind(Ulid::new().to_string())
+    .bind(&actor.id)
+    .bind(&target.id)
+    .bind(&now)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    find_user_by_id(pool, &target.id)
+        .await?
+        .ok_or_else(|| AppError::Internal("重置密码后无法读取用户".to_owned()))
+}
+
+pub async fn change_required_password(
+    pool: &SqlitePool,
+    user: &User,
+    password: &str,
+    password_confirmation: &str,
+) -> Result<(), AppError> {
+    validate_password_confirmation(password, password_confirmation)?;
+    validate_password(password)?;
+    if password == user.username {
+        return Err(AppError::BadRequest("新密码不能继续使用用户名".to_owned()));
+    }
+    let password = password.to_owned();
+    let password_hash = tokio::task::spawn_blocking(move || hash_password(&password))
+        .await
+        .map_err(|error| AppError::Internal(format!("密码任务异常：{error}")))??;
+    sqlx::query(
+        "UPDATE users SET password_hash = ?, must_change_password = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(password_hash)
+    .bind(false)
+    .bind(now_string()?)
+    .bind(&user.id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn find_user_by_id(pool: &SqlitePool, id: &str) -> Result<Option<User>, AppError> {
     Ok(
         sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ?")
@@ -252,6 +328,16 @@ pub async fn current_user(
         Some(user_id) => find_user_by_id(pool, user_id).await,
         None => Ok(None),
     }
+}
+
+pub async fn current_user_from_headers(
+    pool: &SqlitePool,
+    headers: &HeaderMap,
+) -> Result<Option<User>, AppError> {
+    let Some(session) = load_session(pool, headers).await? else {
+        return Ok(None);
+    };
+    current_user(pool, &session).await
 }
 
 pub async fn sign_in(

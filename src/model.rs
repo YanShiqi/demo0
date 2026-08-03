@@ -13,6 +13,7 @@ pub struct User {
     pub password_hash: String,
     pub role: String,
     pub bio: String,
+    pub must_change_password: bool,
     pub avatar_storage_name: Option<String>,
     pub avatar_media_type: Option<String>,
     pub created_at: String,

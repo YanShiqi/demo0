@@ -259,6 +259,249 @@ async fn super_admin_can_promote_an_ordinary_user() {
 }
 
 #[tokio::test]
+async fn super_admin_can_reset_password_and_force_user_to_change_it() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("password_reset.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let super_admin = auth::create_user(
+        &pool,
+        "reset_root",
+        "重置站长",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let target = auth::create_user(
+        &pool,
+        "bob",
+        "忘记密码的人",
+        "old correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let config = test_config(&temporary, database_url);
+    let router = app::build(pool.clone(), config);
+    let super_cookie = sign_in(&router, &super_admin.username, "127.0.0.1:43120").await;
+    let (_, admin_csrf) = page_session_with_cookie(&router, "/admin/users", &super_cookie).await;
+
+    let reset_body = format!("csrf_token={admin_csrf}");
+    let reset_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/users/{}/password-reset", target.id))
+                .header(header::COOKIE, super_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(reset_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reset_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        reset_response.headers().get(header::LOCATION).unwrap(),
+        "/admin/users?password_reset=bob"
+    );
+
+    let must_change =
+        sqlx::query_scalar::<_, bool>("SELECT must_change_password FROM users WHERE id = ?")
+            .bind(&target.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(must_change);
+    let audit_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM password_reset_audit_logs WHERE actor_user_id = ? AND target_user_id = ?",
+    )
+    .bind(&super_admin.id)
+    .bind(&target.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 1);
+
+    let old_password_response = login_with_password(
+        &router,
+        &target.username,
+        "old correct horse battery",
+        "127.0.0.1:43121",
+    )
+    .await;
+    assert_eq!(old_password_response.status(), StatusCode::UNAUTHORIZED);
+
+    let temporary_login_response = login_with_password(
+        &router,
+        &target.username,
+        &target.username,
+        "127.0.0.1:43122",
+    )
+    .await;
+    assert_eq!(temporary_login_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        temporary_login_response
+            .headers()
+            .get(header::LOCATION)
+            .unwrap(),
+        "/password/change-required"
+    );
+    let temporary_cookie = response_cookie(&temporary_login_response);
+
+    let profile_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/profile")
+                .header(header::COOKIE, temporary_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(profile_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        profile_response.headers().get(header::LOCATION).unwrap(),
+        "/password/change-required"
+    );
+
+    let (_, change_csrf) =
+        page_session_with_cookie(&router, "/password/change-required", &temporary_cookie).await;
+    let change_body = format!(
+        "csrf_token={change_csrf}&password=new+correct+horse+battery&password_confirmation=new+correct+horse+battery"
+    );
+    let change_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/password/change-required")
+                .header(header::COOKIE, temporary_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(change_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(change_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        change_response.headers().get(header::LOCATION).unwrap(),
+        "/profile"
+    );
+
+    let must_change =
+        sqlx::query_scalar::<_, bool>("SELECT must_change_password FROM users WHERE id = ?")
+            .bind(&target.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!must_change);
+    let temporary_password_response = login_with_password(
+        &router,
+        &target.username,
+        &target.username,
+        "127.0.0.1:43123",
+    )
+    .await;
+    assert_eq!(
+        temporary_password_response.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let new_password_response = login_with_password(
+        &router,
+        &target.username,
+        "new correct horse battery",
+        "127.0.0.1:43124",
+    )
+    .await;
+    assert_eq!(new_password_response.status(), StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn password_reset_requires_super_admin_and_rejects_super_admin_targets() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("password_reset_permissions.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let super_admin = auth::create_user(
+        &pool,
+        "reset_owner",
+        "重置负责人",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let other_super_admin = auth::create_user(
+        &pool,
+        "other_root",
+        "另一个站长",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "reset_admin",
+        "重置管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    let target = auth::create_user(
+        &pool,
+        "reset_target",
+        "重置目标",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let config = test_config(&temporary, database_url);
+    let router = app::build(pool.clone(), config);
+
+    let admin_cookie = sign_in(&router, &admin.username, "127.0.0.1:43125").await;
+    let (_, admin_csrf) = page_session_with_cookie(&router, "/profile", &admin_cookie).await;
+    let admin_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/users/{}/password-reset", target.id))
+                .header(header::COOKIE, admin_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={admin_csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admin_response.status(), StatusCode::FORBIDDEN);
+
+    let super_cookie = sign_in(&router, &super_admin.username, "127.0.0.1:43126").await;
+    let (_, super_csrf) = page_session_with_cookie(&router, "/admin/users", &super_cookie).await;
+    let super_target_response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/admin/users/{}/password-reset",
+                    other_super_admin.id
+                ))
+                .header(header::COOKIE, super_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={super_csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(super_target_response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn users_can_share_and_manage_public_messages() {
     let temporary = TempDir::new().unwrap();
     let database_path = temporary.path().join("messages.db");
@@ -1048,6 +1291,33 @@ async fn sign_in(router: &axum::Router, username: &str, address: &str) -> String
         .unwrap();
     assert_eq!(login_response.status(), StatusCode::SEE_OTHER);
     response_cookie(&login_response)
+}
+
+async fn login_with_password(
+    router: &axum::Router,
+    username: &str,
+    password: &str,
+    address: &str,
+) -> axum::response::Response {
+    let (anonymous_cookie, login_csrf) = page_session(router, "/login").await;
+    let body = format!(
+        "csrf_token={login_csrf}&username={username}&password={}",
+        password.replace(' ', "+")
+    );
+    router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login")
+                .header(header::COOKIE, anonymous_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .extension(ConnectInfo(address.parse::<SocketAddr>().unwrap()))
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
 }
 
 async fn page_session_with_cookie(

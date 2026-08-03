@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{Router, extract::DefaultBodyLimit, routing::get};
+use axum::{Router, extract::DefaultBodyLimit, middleware, routing::get};
 use sqlx::SqlitePool;
 use tower_http::trace::TraceLayer;
 
@@ -26,6 +26,10 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         .route("/register", get(web::register_page).post(web::register))
         .route("/login", get(web::login_page).post(web::login))
         .route("/logout", axum::routing::post(web::logout))
+        .route(
+            "/password/change-required",
+            get(web::change_password_required_page).post(web::change_required_password),
+        )
         .route(
             "/messages",
             get(web::messages_page).post(web::create_message),
@@ -64,8 +68,16 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
             "/admin/users/{id}/role",
             axum::routing::post(web::update_role),
         )
+        .route(
+            "/admin/users/{id}/password-reset",
+            axum::routing::post(web::reset_user_password),
+        )
         .route("/static/app.css", get(web::app_css))
         .fallback(web::not_found)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            web::enforce_required_password_change,
+        ))
         .layer(DefaultBodyLimit::max(body_limit))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
