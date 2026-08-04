@@ -5,49 +5,80 @@
   <p class="eyebrow">RUST · WSL · LEARNING</p>
   <h1>收容 控制 保护</h1>
   {% if ctx.authenticated %}
-    <section class="home-message-preview" aria-label="Meme 展示墙预览">
+    <section class="panel home-tabs" aria-label="首页动态">
       <div class="preview-heading">
-        <h2>Meme 展示墙</h2>
-        <a href="/memes">查看全部</a>
+        <div>
+          <p class="eyebrow">COMMUNITY FEED</p>
+          <h2>首页动态</h2>
+        </div>
       </div>
-      <p class="muted">最多展示 {{ meme_preview_limit }} 张已审核 Meme。</p>
-      <div class="meme-grid compact-grid">
-        {% if has_memes %}
-          {% for meme in memes %}
-          <article class="meme-card">
-            <a href="/memes">
-              <img class="meme-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
-            </a>
-            <h3>{{ meme.title }}</h3>
-            <p class="muted">by {{ meme.nickname }}</p>
-          </article>
-          {% endfor %}
+      <nav class="status-tabs" aria-label="首页动态页签">
+        {% if home_messages_tab_active %}
+          <a class="small-button" href="/?tab=messages" aria-current="page">留言板</a>
         {% else %}
-          <p class="empty-state">还没有通过审核的 Meme，去提交第一张吧。</p>
+          <a class="small-button secondary" href="/?tab=messages">留言板</a>
         {% endif %}
-      </div>
-    </section>
-    <section class="home-message-preview" aria-label="公共留言板预览">
-      <div class="preview-heading">
-        <h2>公共留言板</h2>
-        <a href="/messages">查看全部</a>
-      </div>
-      <p class="muted">最多展示 {{ message_preview_limit }} 条最近留言。</p>
-      <div class="preview-scroll">
-        {% if has_messages %}
-          {% for message in messages %}
-          <article class="message-card compact-message">
-            <a class="message-author" href="/u/{{ message.username }}">
-              <img class="avatar" src="/users/{{ message.author_user_id }}/avatar" alt="{{ message.nickname }} 的头像">
-              <span><strong>{{ message.nickname }}</strong><small>@{{ message.username }} · {{ message.role_label }}</small></span>
-            </a>
-            <p class="message-body">{{ message.body }}</p>
-          </article>
-          {% endfor %}
+        {% if home_memes_tab_active %}
+          <a class="small-button" href="/?tab=memes" aria-current="page">Memes</a>
         {% else %}
-          <p class="empty-state">还没有留言，去留言板写第一条吧。</p>
+          <a class="small-button secondary" href="/?tab=memes">Memes</a>
         {% endif %}
-      </div>
+      </nav>
+      {% if home_messages_tab_active %}
+        <div class="home-tab-panel" id="home-messages">
+          <div class="preview-heading">
+            <div>
+              <h3>公共留言板</h3>
+              <p class="muted">最多展示 {{ message_preview_limit }} 条最近留言。</p>
+            </div>
+            <a href="/messages">查看全部</a>
+          </div>
+          <div class="preview-scroll">
+            {% if has_messages %}
+              {% for message in messages %}
+              <article class="message-card compact-message">
+                <a class="message-author" href="/u/{{ message.username }}">
+                  <img class="avatar" src="/users/{{ message.author_user_id }}/avatar" alt="{{ message.nickname }} 的头像">
+                  <span><strong>{{ message.nickname }}</strong><small>@{{ message.username }} · {{ message.role_label }}</small></span>
+                </a>
+                <p class="message-body">{{ message.body }}</p>
+              </article>
+              {% endfor %}
+            {% else %}
+              <p class="empty-state">还没有留言，去留言板写第一条吧。</p>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+      {% if home_memes_tab_active %}
+        <div class="home-tab-panel" id="home-memes">
+          <div class="preview-heading">
+            <div>
+              <h3>Meme 展示墙</h3>
+              <p class="muted">最多展示 {{ meme_preview_limit }} 张已审核 Meme。</p>
+            </div>
+            <div class="actions compact-actions">
+              <a href="/memes">查看全部</a>
+              <a href="/memes/new">提交 Meme</a>
+            </div>
+          </div>
+          <div class="meme-grid compact-grid">
+            {% if has_memes %}
+              {% for meme in memes %}
+              <article class="meme-card">
+                <a href="/memes">
+                  <img class="meme-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
+                </a>
+                <h3>{{ meme.title }}</h3>
+                <p class="muted">by {{ meme.nickname }}</p>
+              </article>
+              {% endfor %}
+            {% else %}
+              <p class="empty-state">还没有通过审核的 Meme，去提交第一张吧。</p>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
     </section>
   {% else %}
     <div class="actions"><a class="button" href="/register">创建账号</a><a class="button secondary" href="/login">已有账号</a></div>

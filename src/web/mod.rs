@@ -93,6 +93,28 @@ pub struct AdminUsersQuery {
     password_reset: Option<String>,
 }
 
+#[derive(Deserialize, Default)]
+pub struct HomeQuery {
+    tab: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HomeTab {
+    Messages,
+    Memes,
+}
+
+impl HomeTab {
+    fn from_query(tab: Option<&str>) -> Self {
+        match tab.map(str::trim) {
+            Some(HOME_TAB_MEMES) => Self::Memes,
+            _ => Self::Messages,
+        }
+    }
+}
+
+const HOME_TAB_MEMES: &str = "memes";
+
 #[derive(Deserialize)]
 pub struct NicknameForm {
     csrf_token: String,
@@ -116,8 +138,13 @@ pub struct ProfileQuery {
     updated: Option<String>,
 }
 
-pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, AppError> {
+pub async fn home(
+    State(state): State<AppState>,
+    Query(query): Query<HomeQuery>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
     let (session, _, ctx) = page_context(&state, &headers).await?;
+    let home_tab = HomeTab::from_query(query.tab.as_deref());
     let messages: Vec<MessageView> = public_messages::list_recent_limited(
         &state.pool,
         &state.config.messages,
@@ -145,6 +172,8 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> Result<R
             memes,
             has_memes,
             meme_preview_limit: state.config.memes.home_preview_limit,
+            home_messages_tab_active: home_tab == HomeTab::Messages,
+            home_memes_tab_active: home_tab == HomeTab::Memes,
         },
         StatusCode::OK,
         session.new_cookie,

@@ -12,6 +12,7 @@ use demo0::{
     error::AppError,
     memes::{self, NewMeme},
     model::{Role, User},
+    public_messages,
 };
 use http_body_util::BodyExt;
 use tempfile::TempDir;
@@ -499,6 +500,92 @@ async fn password_reset_requires_super_admin_and_rejects_super_admin_targets() {
         .await
         .unwrap();
     assert_eq!(super_target_response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn home_uses_server_tabs_for_messages_and_memes() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("home_tabs.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let user = auth::create_user(
+        &pool,
+        "home_tab_user",
+        "首页页签用户",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "home_tab_admin",
+        "首页页签管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    let config = test_config(&temporary, database_url);
+    public_messages::create(&pool, &user.id, "首页留言内容", &config.messages)
+        .await
+        .unwrap();
+    approved_meme(&pool, &user, &admin, "home-tab.png", "首页 Meme 标题", 30).await;
+    let router = app::build(pool, config);
+    let cookie = sign_in(&router, &user.username, "127.0.0.1:43127").await;
+
+    let default_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .header(header::COOKIE, cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(default_response.status(), StatusCode::OK);
+    let default_html = response_html(default_response).await;
+    assert!(default_html.contains("首页动态"));
+    assert!(default_html.contains("aria-current=\"page\">留言板"));
+    assert!(default_html.contains("href=\"/?tab=memes\""));
+    assert!(default_html.contains("首页留言内容"));
+    assert!(!default_html.contains("首页 Meme 标题"));
+
+    let memes_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/?tab=memes")
+                .header(header::COOKIE, cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(memes_response.status(), StatusCode::OK);
+    let memes_html = response_html(memes_response).await;
+    assert!(memes_html.contains("aria-current=\"page\">Memes"));
+    assert!(memes_html.contains("href=\"/?tab=messages\""));
+    assert!(memes_html.contains("首页 Meme 标题"));
+    assert!(!memes_html.contains("首页留言内容"));
+
+    let fallback_response = router
+        .oneshot(
+            Request::builder()
+                .uri("/?tab=unknown")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fallback_response.status(), StatusCode::OK);
+    let fallback_html = response_html(fallback_response).await;
+    assert!(fallback_html.contains("aria-current=\"page\">留言板"));
+    assert!(fallback_html.contains("首页留言内容"));
+    assert!(!fallback_html.contains("首页 Meme 标题"));
 }
 
 #[tokio::test]

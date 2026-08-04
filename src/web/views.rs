@@ -12,6 +12,8 @@ pub struct HomeTemplate {
     pub memes: Vec<MemeView>,
     pub has_memes: bool,
     pub meme_preview_limit: i64,
+    pub home_messages_tab_active: bool,
+    pub home_memes_tab_active: bool,
 }
 
 #[derive(Template)]
