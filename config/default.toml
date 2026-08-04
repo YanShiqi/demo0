@@ -57,3 +57,13 @@ max_tags_per_meme = 5
 max_tag_length = 20
 # Meme 标题最大可见字符数。
 max_title_length = 60
+
+[novels]
+# 首页小说页签最多展示的最近更新章节数量。
+home_preview_limit = 5
+# 单章 Markdown 最大上传体积，单位字节。
+chapter_max_upload_bytes = 262144
+# 小说标题最大可见字符数。
+max_title_length = 60
+# 章节标题最大可见字符数。
+max_chapter_title_length = 80

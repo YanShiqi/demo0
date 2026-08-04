@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}连载小说 · 牢笼{% endblock %}
+{% block content %}
+<section class="section-heading">
+  <div><p class="eyebrow">SERIAL NOVELS</p><h1>连载小说</h1></div>
+  <p>慢慢写，慢慢读。这里展示所有公开连载。</p>
+</section>
+
+{% if has_novels %}
+<section class="novel-list">
+  {% for novel in novels %}
+  <article class="novel-card">
+    <h2><a href="/novels/{{ novel.id }}">{{ novel.title }}</a></h2>
+    <p class="muted">最近更新：{{ novel.updated_at }}</p>
+    {% if novel.has_chapters %}
+    <ol class="chapter-list">
+      {% for chapter in novel.chapters %}
+      <li><a href="{{ chapter.href }}">第 {{ chapter.chapter_number }} 章 {{ chapter.title }}</a></li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="muted">还没有章节。</p>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="panel empty-state"><p>还没有连载小说。</p></section>
+{% endif %}
+{% endblock %}
+

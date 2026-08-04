@@ -14,6 +14,10 @@ pub struct HomeTemplate {
     pub meme_preview_limit: i64,
     pub home_messages_tab_active: bool,
     pub home_memes_tab_active: bool,
+    pub home_novels_tab_active: bool,
+    pub novel_chapter_previews: Vec<NovelChapterPreviewView>,
+    pub has_novel_chapter_previews: bool,
+    pub novel_preview_limit: i64,
 }
 
 #[derive(Template)]
@@ -135,6 +139,70 @@ pub struct AdminMemesTemplate {
     pub query: String,
     pub has_query: bool,
     pub return_to: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct NovelChapterPreviewView {
+    pub novel_title: String,
+    pub chapter_title: String,
+    pub chapter_number: i64,
+    pub updated_at: String,
+    pub href: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct NovelView {
+    pub id: String,
+    pub title: String,
+    pub updated_at: String,
+    pub chapters: Vec<NovelChapterView>,
+    pub has_chapters: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct NovelChapterView {
+    pub id: String,
+    pub title: String,
+    pub chapter_number: i64,
+    pub updated_at: String,
+    pub href: String,
+}
+
+#[derive(Template)]
+#[template(path = "novels.html")]
+pub struct NovelsTemplate {
+    pub ctx: PageContext,
+    pub novels: Vec<NovelView>,
+    pub has_novels: bool,
+}
+
+#[derive(Template)]
+#[template(path = "novel_detail.html")]
+pub struct NovelDetailTemplate {
+    pub ctx: PageContext,
+    pub novel: NovelView,
+}
+
+#[derive(Template)]
+#[template(path = "novel_chapter.html")]
+pub struct NovelChapterTemplate {
+    pub ctx: PageContext,
+    pub novel_title: String,
+    pub novel_href: String,
+    pub title: String,
+    pub chapter_number: i64,
+    pub html: String,
+}
+
+#[derive(Template)]
+#[template(path = "admin_novels.html")]
+pub struct AdminNovelsTemplate {
+    pub ctx: PageContext,
+    pub novels: Vec<NovelView>,
+    pub has_novels: bool,
+    pub max_upload_kib: usize,
+    pub max_title_length: usize,
+    pub max_chapter_title_length: usize,
 }
 
 #[derive(Template)]

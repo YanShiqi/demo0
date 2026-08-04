@@ -23,6 +23,11 @@
         {% else %}
           <a class="small-button secondary" href="/?tab=memes">Memes</a>
         {% endif %}
+        {% if home_novels_tab_active %}
+          <a class="small-button" href="/?tab=novels" aria-current="page">连载小说</a>
+        {% else %}
+          <a class="small-button secondary" href="/?tab=novels">连载小说</a>
+        {% endif %}
       </nav>
       {% if home_messages_tab_active %}
         <div class="home-tab-panel" id="home-messages">
@@ -75,6 +80,29 @@
               {% endfor %}
             {% else %}
               <p class="empty-state">还没有通过审核的 Meme，去提交第一张吧。</p>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+      {% if home_novels_tab_active %}
+        <div class="home-tab-panel" id="home-novels">
+          <div class="preview-heading">
+            <div>
+              <h3>连载小说</h3>
+              <p class="muted">最多展示 {{ novel_preview_limit }} 条最近更新章节。</p>
+            </div>
+            <a href="/novels">查看全部</a>
+          </div>
+          <div class="novel-list compact-list">
+            {% if has_novel_chapter_previews %}
+              {% for chapter in novel_chapter_previews %}
+              <article class="novel-card">
+                <a href="{{ chapter.href }}"><strong>{{ chapter.novel_title }}</strong> · 第 {{ chapter.chapter_number }} 章 {{ chapter.chapter_title }}</a>
+                <p class="muted">{{ chapter.updated_at }}</p>
+              </article>
+              {% endfor %}
+            {% else %}
+              <p class="empty-state">还没有连载章节，故事正在路上。</p>
             {% endif %}
           </div>
         </div>

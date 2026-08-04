@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ novel.title }} · 牢笼{% endblock %}
+{% block content %}
+<section class="section-heading">
+  <div><p class="eyebrow">NOVEL</p><h1>{{ novel.title }}</h1></div>
+  <p>最近更新：{{ novel.updated_at }}</p>
+</section>
+
+<section class="panel">
+  <h2>章节目录</h2>
+  {% if novel.has_chapters %}
+  <ol class="chapter-list">
+    {% for chapter in novel.chapters %}
+    <li><a href="{{ chapter.href }}">第 {{ chapter.chapter_number }} 章 {{ chapter.title }}</a><span class="muted">{{ chapter.updated_at }}</span></li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="empty-state">这本小说还没有章节。</p>
+  {% endif %}
+</section>
+{% endblock %}
+

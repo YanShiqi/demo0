@@ -7,12 +7,12 @@ use axum::{
 };
 use demo0::{
     app, auth,
-    config::{Config, DisplayConfig, MemeConfig, MessageConfig},
+    config::{Config, DisplayConfig, MemeConfig, MessageConfig, NovelConfig},
     db,
     error::AppError,
     memes::{self, NewMeme},
     model::{Role, User},
-    public_messages,
+    novels, public_messages,
 };
 use http_body_util::BodyExt;
 use tempfile::TempDir;
@@ -586,6 +586,280 @@ async fn home_uses_server_tabs_for_messages_and_memes() {
     assert!(fallback_html.contains("aria-current=\"page\">留言板"));
     assert!(fallback_html.contains("首页留言内容"));
     assert!(!fallback_html.contains("首页 Meme 标题"));
+}
+
+#[tokio::test]
+async fn super_admin_can_publish_serialized_novel_chapters() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("novels.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let super_admin = auth::create_user(
+        &pool,
+        "novel_root",
+        "小说站长",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let reader = auth::create_user(
+        &pool,
+        "novel_reader",
+        "小说读者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let config = test_config(&temporary, database_url);
+    let router = app::build(pool.clone(), config);
+    let admin_cookie = sign_in(&router, &super_admin.username, "127.0.0.1:43128").await;
+    let (_, admin_csrf) = page_session_with_cookie(&router, "/admin/novels", &admin_cookie).await;
+
+    let create_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/novels")
+                .header(header::COOKIE, admin_cookie.clone())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "csrf_token={admin_csrf}&title=%E9%9B%AA%E4%B8%AD%E5%B0%8F%E7%8C%AA"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_response.status(), StatusCode::SEE_OTHER);
+    let novel_id = sqlx::query_scalar::<_, String>("SELECT id FROM novels WHERE title = ?")
+        .bind("雪中小猪")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let chapter_markdown = "# 开头\n\n这是一段**正文**。\n\n<script>alert(1)</script>";
+    let chapter_body = multipart_body(
+        &admin_csrf,
+        &[("title", "第一章 风起")],
+        "chapter",
+        "chapter.md",
+        "text/markdown",
+        chapter_markdown.as_bytes(),
+    );
+    let upload_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/novels/{novel_id}/chapters"))
+                .header(header::COOKIE, admin_cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={MULTIPART_BOUNDARY}"),
+                )
+                .body(Body::from(chapter_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(upload_response.status(), StatusCode::SEE_OTHER);
+    let chapter_id =
+        sqlx::query_scalar::<_, String>("SELECT id FROM novel_chapters WHERE novel_id = ?")
+            .bind(&novel_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let reader_cookie = sign_in(&router, &reader.username, "127.0.0.1:43129").await;
+    let home_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/?tab=novels")
+                .header(header::COOKIE, reader_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(home_response.status(), StatusCode::OK);
+    let home_html = response_html(home_response).await;
+    assert!(home_html.contains("aria-current=\"page\">连载小说"));
+    assert!(home_html.contains("雪中小猪"));
+    assert!(home_html.contains("第一章 风起"));
+
+    let list_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/novels")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(list_html.contains("雪中小猪"));
+
+    let detail_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/novels/{novel_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(detail_html.contains("第一章 风起"));
+
+    let chapter_html = response_html(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/novels/{novel_id}/chapters/{chapter_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(chapter_html.contains("<strong>正文</strong>"));
+    assert!(!chapter_html.contains("<script"));
+    assert!(!chapter_html.contains("alert(1)"));
+}
+
+#[tokio::test]
+async fn only_super_admin_can_manage_novels() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("novel-permissions.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "novel_admin",
+        "小说管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    let config = test_config(&temporary, database_url);
+    let router = app::build(pool, config);
+    let admin_cookie = sign_in(&router, &admin.username, "127.0.0.1:43130").await;
+    let (_, csrf) = page_session_with_cookie(&router, "/profile", &admin_cookie).await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/novels")
+                .header(header::COOKIE, admin_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "csrf_token={csrf}&title=%E6%99%AE%E9%80%9A%E7%AE%A1%E7%90%86%E5%91%98%E7%9A%84%E5%B0%8F%E8%AF%B4"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn super_admin_can_soft_delete_novels_and_chapters() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("novel-deletions.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let super_admin = auth::create_user(
+        &pool,
+        "novel_delete_root",
+        "小说删除站长",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let config = test_config(&temporary, database_url);
+    let novel_id = novels::create_novel(&pool, "会被删除的小说", &config.novels)
+        .await
+        .unwrap();
+    let chapter_id = novels::create_chapter(
+        &pool,
+        &novel_id,
+        "会被删除的章节",
+        "这章会被删除",
+        &config.novels,
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool, config);
+    let cookie = sign_in(&router, &super_admin.username, "127.0.0.1:43131").await;
+    let (_, csrf) = page_session_with_cookie(&router, "/admin/novels", &cookie).await;
+
+    let delete_chapter_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/admin/novels/{novel_id}/chapters/{chapter_id}/delete"
+                ))
+                .header(header::COOKIE, cookie.clone())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_chapter_response.status(), StatusCode::SEE_OTHER);
+
+    let deleted_chapter_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/novels/{novel_id}/chapters/{chapter_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted_chapter_response.status(), StatusCode::NOT_FOUND);
+
+    let delete_novel_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/novels/{novel_id}/delete"))
+                .header(header::COOKIE, cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_novel_response.status(), StatusCode::SEE_OTHER);
+
+    let deleted_novel_response = router
+        .oneshot(
+            Request::builder()
+                .uri(format!("/novels/{novel_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(deleted_novel_response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -1337,6 +1611,12 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             max_tags_per_meme: 5,
             max_tag_length: 20,
             max_title_length: 60,
+        },
+        novels: NovelConfig {
+            home_preview_limit: 5,
+            chapter_max_upload_bytes: 256 * 1024,
+            max_title_length: 60,
+            max_chapter_title_length: 80,
         },
     }
 }

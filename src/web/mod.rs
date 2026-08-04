@@ -21,13 +21,16 @@ use crate::{
     error::AppError,
     memes::{self, MemeRow, MemeWithTags, NewMeme},
     model::{PageContext, Role, SessionContext, SessionRow, User},
+    novels::{self, NovelChapterPreviewRow, NovelChapterRow, NovelWithChapters},
     public_messages::{self, PublicMessageRow},
     time_display,
 };
 use views::{
-    AdminMemesTemplate, AdminUserView, AdminUsersTemplate, HomeTemplate, LoginTemplate, MemeView,
-    MemesTemplate, MessageView, MessagesTemplate, NewMemeTemplate, PasswordChangeRequiredTemplate,
-    PopularTagView, ProfileTemplate, PublicProfileTemplate, RegisterTemplate,
+    AdminMemesTemplate, AdminNovelsTemplate, AdminUserView, AdminUsersTemplate, HomeTemplate,
+    LoginTemplate, MemeView, MemesTemplate, MessageView, MessagesTemplate, NewMemeTemplate,
+    NovelChapterPreviewView, NovelChapterTemplate, NovelChapterView, NovelDetailTemplate,
+    NovelView, NovelsTemplate, PasswordChangeRequiredTemplate, PopularTagView, ProfileTemplate,
+    PublicProfileTemplate, RegisterTemplate,
 };
 
 #[derive(Deserialize)]
@@ -49,6 +52,12 @@ pub struct LoginForm {
 #[derive(Deserialize)]
 pub struct CsrfForm {
     csrf_token: String,
+}
+
+#[derive(Deserialize)]
+pub struct NovelForm {
+    csrf_token: String,
+    title: String,
 }
 
 #[derive(Deserialize)]
@@ -102,18 +111,21 @@ pub struct HomeQuery {
 enum HomeTab {
     Messages,
     Memes,
+    Novels,
 }
 
 impl HomeTab {
     fn from_query(tab: Option<&str>) -> Self {
         match tab.map(str::trim) {
             Some(HOME_TAB_MEMES) => Self::Memes,
+            Some(HOME_TAB_NOVELS) => Self::Novels,
             _ => Self::Messages,
         }
     }
 }
 
 const HOME_TAB_MEMES: &str = "memes";
+const HOME_TAB_NOVELS: &str = "novels";
 
 #[derive(Deserialize)]
 pub struct NicknameForm {
@@ -163,6 +175,15 @@ pub async fn home(
         .map(|meme| meme_view(meme, state.config.display.utc_offset_hours))
         .collect();
     let has_memes = !memes.is_empty();
+    let novel_chapter_previews: Vec<NovelChapterPreviewView> =
+        novels::list_recent_chapters(&state.pool, state.config.novels.home_preview_limit)
+            .await?
+            .into_iter()
+            .map(|chapter| {
+                novel_chapter_preview_view(chapter, state.config.display.utc_offset_hours)
+            })
+            .collect();
+    let has_novel_chapter_previews = !novel_chapter_previews.is_empty();
     render(
         HomeTemplate {
             ctx,
@@ -174,6 +195,10 @@ pub async fn home(
             meme_preview_limit: state.config.memes.home_preview_limit,
             home_messages_tab_active: home_tab == HomeTab::Messages,
             home_memes_tab_active: home_tab == HomeTab::Memes,
+            home_novels_tab_active: home_tab == HomeTab::Novels,
+            novel_chapter_previews,
+            has_novel_chapter_previews,
+            novel_preview_limit: state.config.novels.home_preview_limit,
         },
         StatusCode::OK,
         session.new_cookie,
@@ -686,6 +711,180 @@ pub async fn delete_own_meme(
     redirect("/profile?updated=meme", None)
 }
 
+pub async fn novels_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let (session, _, ctx) = page_context(&state, &headers).await?;
+    let novels: Vec<NovelView> = novels::list_novels_with_chapters(&state.pool)
+        .await?
+        .into_iter()
+        .map(|novel| novel_view(novel, state.config.display.utc_offset_hours))
+        .collect();
+    let has_novels = !novels.is_empty();
+    render(
+        NovelsTemplate {
+            ctx,
+            novels,
+            has_novels,
+        },
+        StatusCode::OK,
+        session.new_cookie,
+    )
+}
+
+pub async fn novel_detail_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(novel_id): Path<String>,
+) -> Result<Response, AppError> {
+    let (session, _, ctx) = page_context(&state, &headers).await?;
+    let novel = novels::get_novel(&state.pool, &novel_id).await?;
+    let chapters = novels::list_chapters(&state.pool, &novel_id).await?;
+    render(
+        NovelDetailTemplate {
+            ctx,
+            novel: novel_view(
+                NovelWithChapters { novel, chapters },
+                state.config.display.utc_offset_hours,
+            ),
+        },
+        StatusCode::OK,
+        session.new_cookie,
+    )
+}
+
+pub async fn novel_chapter_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((novel_id, chapter_id)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let (session, _, ctx) = page_context(&state, &headers).await?;
+    let novel = novels::get_novel(&state.pool, &novel_id).await?;
+    let chapter = novels::get_chapter(&state.pool, &novel_id, &chapter_id).await?;
+    render(
+        NovelChapterTemplate {
+            ctx,
+            novel_title: novel.title,
+            novel_href: format!("/novels/{novel_id}"),
+            title: chapter.title,
+            chapter_number: chapter.chapter_number,
+            html: novels::render_markdown(&chapter.markdown),
+        },
+        StatusCode::OK,
+        session.new_cookie,
+    )
+}
+
+pub async fn admin_novels(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let actor = require_super_admin(&state, &session).await?;
+    render_admin_novels(&state, &session, &actor).await
+}
+
+pub async fn create_novel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<NovelForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let _actor = require_super_admin(&state, &session).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    novels::create_novel(&state.pool, &form.title, &state.config.novels).await?;
+    redirect("/admin/novels", None)
+}
+
+pub async fn delete_novel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(novel_id): Path<String>,
+    Form(form): Form<CsrfForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let _actor = require_super_admin(&state, &session).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    novels::soft_delete_novel(&state.pool, &novel_id).await?;
+    redirect("/admin/novels", None)
+}
+
+pub async fn create_novel_chapter(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(novel_id): Path<String>,
+    mut multipart: Multipart,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let _actor = require_super_admin(&state, &session).await?;
+    let mut csrf_token = None;
+    let mut title = String::new();
+    let mut file_name = None;
+    let mut file_bytes = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| AppError::BadRequest("无法读取章节上传表单".to_owned()))?
+    {
+        let field_name = field.name().unwrap_or_default().to_owned();
+        match field_name.as_str() {
+            "csrf_token" => {
+                csrf_token = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|_| AppError::BadRequest("CSRF 字段无效".to_owned()))?,
+                );
+            }
+            "title" => {
+                title = field
+                    .text()
+                    .await
+                    .map_err(|_| AppError::BadRequest("章节标题字段无效".to_owned()))?;
+            }
+            "chapter" => {
+                file_name = field.file_name().map(str::to_owned);
+                file_bytes = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|_| AppError::BadRequest("章节文件读取失败".to_owned()))?
+                        .to_vec(),
+                );
+            }
+            _ => {}
+        }
+    }
+    auth::verify_csrf(&session, csrf_token.as_deref().unwrap_or_default())?;
+    let bytes = file_bytes.ok_or_else(|| AppError::BadRequest("请选择章节 Markdown".to_owned()))?;
+    let markdown =
+        novels::validate_chapter_upload(file_name.as_deref(), &bytes, &state.config.novels)?;
+    novels::create_chapter(
+        &state.pool,
+        &novel_id,
+        &title,
+        &markdown,
+        &state.config.novels,
+    )
+    .await?;
+    redirect("/admin/novels", None)
+}
+
+pub async fn delete_novel_chapter(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((novel_id, chapter_id)): Path<(String, String)>,
+    Form(form): Form<CsrfForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let _actor = require_super_admin(&state, &session).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    novels::soft_delete_chapter(&state.pool, &novel_id, &chapter_id).await?;
+    redirect("/admin/novels", None)
+}
+
 pub async fn profile_page(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1122,6 +1321,31 @@ fn render_password_change_required(
     )
 }
 
+async fn render_admin_novels(
+    state: &AppState,
+    session: &SessionRow,
+    actor: &User,
+) -> Result<Response, AppError> {
+    let novels: Vec<NovelView> = novels::list_novels_with_chapters(&state.pool)
+        .await?
+        .into_iter()
+        .map(|novel| novel_view(novel, state.config.display.utc_offset_hours))
+        .collect();
+    let has_novels = !novels.is_empty();
+    render(
+        AdminNovelsTemplate {
+            ctx: PageContext::authenticated(session.csrf_token.clone(), actor),
+            novels,
+            has_novels,
+            max_upload_kib: state.config.novels.chapter_max_upload_bytes / 1024,
+            max_title_length: state.config.novels.max_title_length,
+            max_chapter_title_length: state.config.novels.max_chapter_title_length,
+        },
+        StatusCode::OK,
+        None,
+    )
+}
+
 async fn render_profile(
     state: &AppState,
     session: &SessionRow,
@@ -1285,6 +1509,47 @@ fn meme_view(meme: MemeWithTags, utc_offset_hours: i8) -> MemeView {
         created_at: time_display::friendly_rfc3339(&meme.row.created_at, utc_offset_hours),
         has_tags: !meme.tags.is_empty(),
         tags: meme.tags,
+    }
+}
+
+fn novel_chapter_preview_view(
+    chapter: NovelChapterPreviewRow,
+    utc_offset_hours: i8,
+) -> NovelChapterPreviewView {
+    NovelChapterPreviewView {
+        href: format!(
+            "/novels/{}/chapters/{}",
+            chapter.novel_id, chapter.chapter_id
+        ),
+        novel_title: chapter.novel_title,
+        chapter_title: chapter.chapter_title,
+        chapter_number: chapter.chapter_number,
+        updated_at: time_display::friendly_rfc3339(&chapter.updated_at, utc_offset_hours),
+    }
+}
+
+fn novel_view(novel: NovelWithChapters, utc_offset_hours: i8) -> NovelView {
+    let chapters: Vec<NovelChapterView> = novel
+        .chapters
+        .into_iter()
+        .map(|chapter| novel_chapter_view(chapter, utc_offset_hours))
+        .collect();
+    NovelView {
+        id: novel.novel.id,
+        title: novel.novel.title,
+        updated_at: time_display::friendly_rfc3339(&novel.novel.updated_at, utc_offset_hours),
+        has_chapters: !chapters.is_empty(),
+        chapters,
+    }
+}
+
+fn novel_chapter_view(chapter: NovelChapterRow, utc_offset_hours: i8) -> NovelChapterView {
+    NovelChapterView {
+        href: format!("/novels/{}/chapters/{}", chapter.novel_id, chapter.id),
+        id: chapter.id,
+        title: chapter.title,
+        chapter_number: chapter.chapter_number,
+        updated_at: time_display::friendly_rfc3339(&chapter.updated_at, utc_offset_hours),
     }
 }
 

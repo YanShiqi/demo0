@@ -6,6 +6,7 @@ pub mod db;
 pub mod error;
 pub mod memes;
 pub mod model;
+pub mod novels;
 pub mod public_messages;
 pub mod rate_limit;
 pub mod time_display;

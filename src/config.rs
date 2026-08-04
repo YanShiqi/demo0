@@ -27,6 +27,10 @@ const DEFAULT_MEME_POPULAR_TAG_LIMIT: i64 = 10;
 const DEFAULT_MEME_MAX_TAGS_PER_MEME: usize = 5;
 const DEFAULT_MEME_MAX_TAG_LENGTH: usize = 20;
 const DEFAULT_MEME_MAX_TITLE_LENGTH: usize = 60;
+const DEFAULT_NOVEL_HOME_PREVIEW_LIMIT: i64 = 5;
+const DEFAULT_NOVEL_CHAPTER_MAX_UPLOAD_BYTES: usize = 256 * 1024;
+const DEFAULT_NOVEL_MAX_TITLE_LENGTH: usize = 60;
+const DEFAULT_NOVEL_MAX_CHAPTER_TITLE_LENGTH: usize = 80;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -38,6 +42,7 @@ pub struct Config {
     pub display: DisplayConfig,
     pub messages: MessageConfig,
     pub memes: MemeConfig,
+    pub novels: NovelConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -68,6 +73,14 @@ pub struct MemeConfig {
     pub max_tags_per_meme: usize,
     pub max_tag_length: usize,
     pub max_title_length: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct NovelConfig {
+    pub home_preview_limit: i64,
+    pub chapter_max_upload_bytes: usize,
+    pub max_title_length: usize,
+    pub max_chapter_title_length: usize,
 }
 
 impl Config {
@@ -109,6 +122,7 @@ impl Config {
         let display = DisplayConfig::from_sources(file_config.display)?;
         let messages = MessageConfig::from_sources(file_config.messages)?;
         let memes = MemeConfig::from_sources(file_config.memes)?;
+        let novels = NovelConfig::from_sources(file_config.novels)?;
 
         Ok(Self {
             host,
@@ -119,6 +133,7 @@ impl Config {
             display,
             messages,
             memes,
+            novels,
         })
     }
 
@@ -126,6 +141,45 @@ impl Config {
         format!("{}:{}", self.host, self.port)
             .parse()
             .context("APP_HOST 或 APP_PORT 无效")
+    }
+}
+
+impl NovelConfig {
+    fn from_sources(file_config: Option<NovelFileConfig>) -> Result<Self> {
+        let file_config = file_config.unwrap_or_default();
+        let home_preview_limit = parse_optional_env("NOVEL_HOME_PREVIEW_LIMIT")?
+            .or(file_config.home_preview_limit)
+            .unwrap_or(DEFAULT_NOVEL_HOME_PREVIEW_LIMIT);
+        let chapter_max_upload_bytes = parse_optional_env("NOVEL_CHAPTER_MAX_UPLOAD_BYTES")?
+            .or(file_config.chapter_max_upload_bytes)
+            .unwrap_or(DEFAULT_NOVEL_CHAPTER_MAX_UPLOAD_BYTES);
+        let max_title_length = parse_optional_env("NOVEL_MAX_TITLE_LENGTH")?
+            .or(file_config.max_title_length)
+            .unwrap_or(DEFAULT_NOVEL_MAX_TITLE_LENGTH);
+        let max_chapter_title_length = parse_optional_env("NOVEL_MAX_CHAPTER_TITLE_LENGTH")?
+            .or(file_config.max_chapter_title_length)
+            .unwrap_or(DEFAULT_NOVEL_MAX_CHAPTER_TITLE_LENGTH);
+
+        anyhow::ensure!(
+            home_preview_limit > 0,
+            "NOVEL_HOME_PREVIEW_LIMIT 必须大于 0"
+        );
+        anyhow::ensure!(
+            chapter_max_upload_bytes > 0,
+            "NOVEL_CHAPTER_MAX_UPLOAD_BYTES 必须大于 0"
+        );
+        anyhow::ensure!(max_title_length > 0, "NOVEL_MAX_TITLE_LENGTH 必须大于 0");
+        anyhow::ensure!(
+            max_chapter_title_length > 0,
+            "NOVEL_MAX_CHAPTER_TITLE_LENGTH 必须大于 0"
+        );
+
+        Ok(Self {
+            home_preview_limit,
+            chapter_max_upload_bytes,
+            max_title_length,
+            max_chapter_title_length,
+        })
     }
 }
 
@@ -262,6 +316,7 @@ struct FileConfig {
     display: Option<DisplayFileConfig>,
     messages: Option<MessageFileConfig>,
     memes: Option<MemeFileConfig>,
+    novels: Option<NovelFileConfig>,
 }
 
 impl FileConfig {
@@ -325,6 +380,14 @@ struct MemeFileConfig {
     max_tags_per_meme: Option<usize>,
     max_tag_length: Option<usize>,
     max_title_length: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct NovelFileConfig {
+    home_preview_limit: Option<i64>,
+    chapter_max_upload_bytes: Option<usize>,
+    max_title_length: Option<usize>,
+    max_chapter_title_length: Option<usize>,
 }
 
 fn parse_optional_env<T>(name: &str) -> Result<Option<T>>

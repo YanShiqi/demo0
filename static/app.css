@@ -449,6 +449,55 @@ small {
     gap: 16px;
 }
 
+.novel-list {
+    display: grid;
+    gap: 16px;
+}
+
+.novel-card {
+    padding: 22px;
+    background: rgba(17, 28, 26, 0.78);
+    border: 1px solid rgba(98, 199, 182, 0.14);
+    border-radius: 20px;
+}
+
+.novel-card a,
+.chapter-list a,
+.novel-reading a {
+    color: var(--teal);
+}
+
+.chapter-list {
+    display: grid;
+    gap: 10px;
+    padding-left: 22px;
+}
+
+.chapter-list li {
+    line-height: 1.7;
+}
+
+.chapter-upload-form {
+    display: grid;
+    gap: 14px;
+    margin: 18px 0;
+}
+
+.novel-reading {
+    max-width: 760px;
+    margin-right: auto;
+    margin-left: auto;
+    font-size: 18px;
+    line-height: 1.9;
+}
+
+.novel-reading pre {
+    overflow-x: auto;
+    padding: 16px;
+    background: var(--surface-raised);
+    border-radius: 14px;
+}
+
 .panel {
     margin-bottom: 26px;
     padding: 26px;

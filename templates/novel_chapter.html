@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · {{ novel_title }} · 牢笼{% endblock %}
+{% block content %}
+<section class="section-heading">
+  <div><p class="eyebrow">CHAPTER {{ chapter_number }}</p><h1>{{ title }}</h1></div>
+  <p><a href="{{ novel_href }}">{{ novel_title }}</a></p>
+</section>
+
+<article class="panel novel-reading">
+  {{ html|safe }}
+</article>
+{% endblock %}
+

@@ -14,7 +14,12 @@ pub struct AppState {
 }
 
 pub fn build(pool: SqlitePool, config: Config) -> Router {
-    let body_limit = config.memes.max_upload_bytes.max(MAX_UPLOAD_BYTES) + 128 * 1024;
+    let body_limit = config
+        .memes
+        .max_upload_bytes
+        .max(MAX_UPLOAD_BYTES)
+        .max(config.novels.chapter_max_upload_bytes)
+        + 128 * 1024;
     let state = AppState {
         pool,
         config: Arc::new(config),
@@ -45,6 +50,12 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
             "/memes/{id}/delete",
             axum::routing::post(web::delete_own_meme),
         )
+        .route("/novels", get(web::novels_page))
+        .route("/novels/{id}", get(web::novel_detail_page))
+        .route(
+            "/novels/{novel_id}/chapters/{chapter_id}",
+            get(web::novel_chapter_page),
+        )
         .route("/admin/memes", get(web::admin_memes))
         .route(
             "/admin/memes/{id}/approve",
@@ -71,6 +82,22 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         .route(
             "/admin/users/{id}/password-reset",
             axum::routing::post(web::reset_user_password),
+        )
+        .route(
+            "/admin/novels",
+            get(web::admin_novels).post(web::create_novel),
+        )
+        .route(
+            "/admin/novels/{id}/delete",
+            axum::routing::post(web::delete_novel),
+        )
+        .route(
+            "/admin/novels/{id}/chapters",
+            axum::routing::post(web::create_novel_chapter),
+        )
+        .route(
+            "/admin/novels/{novel_id}/chapters/{chapter_id}/delete",
+            axum::routing::post(web::delete_novel_chapter),
         )
         .route("/static/app.css", get(web::app_css))
         .fallback(web::not_found)

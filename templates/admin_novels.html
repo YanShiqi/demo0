@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}小说管理 · 牢笼{% endblock %}
+{% block content %}
+<section class="section-heading">
+  <div><p class="eyebrow">SUPER ADMIN</p><h1>小说管理</h1></div>
+  <p>只有超级管理员可以新增小说、上传章节和删除内容。</p>
+</section>
+
+<section class="form-card message-composer">
+  <h2>新增小说</h2>
+  <form action="/admin/novels" method="post">
+    <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+    <label>小说名<input name="title" maxlength="{{ max_title_length }}" required><small>{{ max_title_length }} 个字符以内</small></label>
+    <button class="button" type="submit">新增小说</button>
+  </form>
+</section>
+
+{% if has_novels %}
+<section class="novel-list">
+  {% for novel in novels %}
+  <article class="novel-card">
+    <div class="preview-heading">
+      <div>
+        <h2>{{ novel.title }}</h2>
+        <p class="muted">最近更新：{{ novel.updated_at }}</p>
+      </div>
+      <form action="/admin/novels/{{ novel.id }}/delete" method="post" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+        <button class="small-button secondary" type="submit">删除小说</button>
+      </form>
+    </div>
+    <form action="/admin/novels/{{ novel.id }}/chapters" method="post" enctype="multipart/form-data" class="chapter-upload-form">
+      <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+      <label>章节名<input name="title" maxlength="{{ max_chapter_title_length }}" required><small>{{ max_chapter_title_length }} 个字符以内</small></label>
+      <label>Markdown 文件<input type="file" name="chapter" accept=".md,text/markdown,text/plain" required><small>仅支持 .md，最大 {{ max_upload_kib }} KiB</small></label>
+      <button class="button" type="submit">上传章节</button>
+    </form>
+    {% if novel.has_chapters %}
+    <ol class="chapter-list">
+      {% for chapter in novel.chapters %}
+      <li>
+        <a href="{{ chapter.href }}">第 {{ chapter.chapter_number }} 章 {{ chapter.title }}</a>
+        <form action="/admin/novels/{{ novel.id }}/chapters/{{ chapter.id }}/delete" method="post" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+          <button class="link-button danger-link" type="submit">删除章节</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ol>
+    {% else %}
+    <p class="muted">还没有章节。</p>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="panel empty-state"><p>还没有小说，先新增一本吧。</p></section>
+{% endif %}
+{% endblock %}
+
