@@ -168,6 +168,14 @@ pub struct NovelChapterView {
     pub href: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct NovelChapterCommentView {
+    pub id: String,
+    pub body: String,
+    pub created_at: String,
+    pub can_delete: bool,
+}
+
 #[derive(Template)]
 #[template(path = "novels.html")]
 pub struct NovelsTemplate {
@@ -187,11 +195,18 @@ pub struct NovelDetailTemplate {
 #[template(path = "novel_chapter.html")]
 pub struct NovelChapterTemplate {
     pub ctx: PageContext,
+    pub novel_id: String,
+    pub chapter_id: String,
     pub novel_title: String,
     pub novel_href: String,
     pub title: String,
     pub chapter_number: i64,
     pub html: String,
+    pub comments: Vec<NovelChapterCommentView>,
+    pub has_comments: bool,
+    pub authenticated: bool,
+    pub comment_max_length: usize,
+    pub return_to: String,
 }
 
 #[derive(Template)]

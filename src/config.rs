@@ -31,6 +31,8 @@ const DEFAULT_NOVEL_HOME_PREVIEW_LIMIT: i64 = 5;
 const DEFAULT_NOVEL_CHAPTER_MAX_UPLOAD_BYTES: usize = 256 * 1024;
 const DEFAULT_NOVEL_MAX_TITLE_LENGTH: usize = 60;
 const DEFAULT_NOVEL_MAX_CHAPTER_TITLE_LENGTH: usize = 80;
+const DEFAULT_NOVEL_CHAPTER_COMMENT_MAX_LENGTH: usize = 300;
+const DEFAULT_NOVEL_CHAPTER_COMMENT_PAGE_SIZE: i64 = 50;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -81,6 +83,8 @@ pub struct NovelConfig {
     pub chapter_max_upload_bytes: usize,
     pub max_title_length: usize,
     pub max_chapter_title_length: usize,
+    pub chapter_comment_max_length: usize,
+    pub chapter_comment_page_size: i64,
 }
 
 impl Config {
@@ -159,6 +163,12 @@ impl NovelConfig {
         let max_chapter_title_length = parse_optional_env("NOVEL_MAX_CHAPTER_TITLE_LENGTH")?
             .or(file_config.max_chapter_title_length)
             .unwrap_or(DEFAULT_NOVEL_MAX_CHAPTER_TITLE_LENGTH);
+        let chapter_comment_max_length = parse_optional_env("NOVEL_CHAPTER_COMMENT_MAX_LENGTH")?
+            .or(file_config.chapter_comment_max_length)
+            .unwrap_or(DEFAULT_NOVEL_CHAPTER_COMMENT_MAX_LENGTH);
+        let chapter_comment_page_size = parse_optional_env("NOVEL_CHAPTER_COMMENT_PAGE_SIZE")?
+            .or(file_config.chapter_comment_page_size)
+            .unwrap_or(DEFAULT_NOVEL_CHAPTER_COMMENT_PAGE_SIZE);
 
         anyhow::ensure!(
             home_preview_limit > 0,
@@ -173,12 +183,22 @@ impl NovelConfig {
             max_chapter_title_length > 0,
             "NOVEL_MAX_CHAPTER_TITLE_LENGTH 必须大于 0"
         );
+        anyhow::ensure!(
+            chapter_comment_max_length > 0,
+            "NOVEL_CHAPTER_COMMENT_MAX_LENGTH 必须大于 0"
+        );
+        anyhow::ensure!(
+            chapter_comment_page_size > 0,
+            "NOVEL_CHAPTER_COMMENT_PAGE_SIZE 必须大于 0"
+        );
 
         Ok(Self {
             home_preview_limit,
             chapter_max_upload_bytes,
             max_title_length,
             max_chapter_title_length,
+            chapter_comment_max_length,
+            chapter_comment_page_size,
         })
     }
 }
@@ -388,6 +408,8 @@ struct NovelFileConfig {
     chapter_max_upload_bytes: Option<usize>,
     max_title_length: Option<usize>,
     max_chapter_title_length: Option<usize>,
+    chapter_comment_max_length: Option<usize>,
+    chapter_comment_page_size: Option<i64>,
 }
 
 fn parse_optional_env<T>(name: &str) -> Result<Option<T>>

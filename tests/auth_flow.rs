@@ -3,7 +3,7 @@ use std::{net::SocketAddr, path::Path};
 use axum::{
     body::Body,
     extract::ConnectInfo,
-    http::{Request, StatusCode, header},
+    http::{HeaderValue, Request, StatusCode, header},
 };
 use demo0::{
     app, auth,
@@ -863,6 +863,207 @@ async fn super_admin_can_soft_delete_novels_and_chapters() {
 }
 
 #[tokio::test]
+async fn logged_in_users_can_leave_anonymous_novel_chapter_comments() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("novel-comments.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let reader = auth::create_user(
+        &pool,
+        "chapter_reader",
+        "真实读者昵称",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "chapter_comment_admin",
+        "评论管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    let config = test_config(&temporary, database_url);
+    let novel_id = novels::create_novel(&pool, "可评论的小说", &config.novels)
+        .await
+        .unwrap();
+    let chapter_id = novels::create_chapter(
+        &pool,
+        &novel_id,
+        "可以评论的一章",
+        "正文内容",
+        &config.novels,
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool.clone(), config);
+    let chapter_path = format!("/novels/{novel_id}/chapters/{chapter_id}");
+    let reader_cookie = sign_in(&router, &reader.username, "127.0.0.1:43132").await;
+    let (_, reader_csrf) = page_session_with_cookie(&router, &chapter_path, &reader_cookie).await;
+
+    let comment_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("{chapter_path}/comments"))
+                .header(header::COOKIE, reader_cookie.clone())
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "csrf_token={reader_csrf}&body=%E8%BF%99%E7%AB%A0%E5%BE%88%E6%9C%89%E8%B6%A3+%F0%9F%90%B7%3Cscript%3Ealert(1)%3C%2Fscript%3E"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(comment_response.status(), StatusCode::SEE_OTHER);
+
+    let reader_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&chapter_path)
+                    .header(header::COOKIE, reader_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(reader_html.contains("匿名读者"));
+    assert!(reader_html.contains("这章很有趣"));
+    assert!(reader_html.contains("🐷"));
+    assert!(reader_html.contains("&#60;script&#62;alert(1)&#60;/script&#62;"));
+    assert!(!reader_html.contains("<script>alert(1)</script>"));
+    assert!(!reader_html.contains("/u/chapter_reader"));
+    assert!(!reader_html.contains("/admin/novels/comments/"));
+
+    let anonymous_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&chapter_path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(anonymous_html.contains("匿名读者"));
+    assert!(anonymous_html.contains("登录后可以匿名评论"));
+
+    let admin_cookie = sign_in(&router, &admin.username, "127.0.0.1:43133").await;
+    let (_, admin_csrf) = page_session_with_cookie(&router, &chapter_path, &admin_cookie).await;
+    let admin_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(&chapter_path)
+                    .header(header::COOKIE, admin_cookie.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(admin_html.contains("/admin/novels/comments/"));
+    let comment_id = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM novel_chapter_comments WHERE chapter_id = ?",
+    )
+    .bind(&chapter_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let delete_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/novels/comments/{comment_id}/delete"))
+                .header(header::COOKIE, admin_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "csrf_token={admin_csrf}&return_to={chapter_path}"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(delete_response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        delete_response.headers().get(header::LOCATION).unwrap(),
+        &HeaderValue::from_str(&chapter_path).unwrap()
+    );
+
+    let after_delete_html = response_html(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri(&chapter_path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(!after_delete_html.contains("这章很有趣"));
+}
+
+#[tokio::test]
+async fn anonymous_visitors_cannot_comment_on_novel_chapters() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("novel-comments-auth.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let novel_id = novels::create_novel(&pool, "游客不能评论的小说", &config.novels)
+        .await
+        .unwrap();
+    let chapter_id = novels::create_chapter(
+        &pool,
+        &novel_id,
+        "游客不能评论的一章",
+        "正文内容",
+        &config.novels,
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool.clone(), config);
+    let chapter_path = format!("/novels/{novel_id}/chapters/{chapter_id}");
+    let (anonymous_cookie, csrf) = page_session(&router, "/login").await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("{chapter_path}/comments"))
+                .header(header::COOKIE, anonymous_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={csrf}&body=visitor")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let comment_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM novel_chapter_comments")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(comment_count, 0);
+}
+
+#[tokio::test]
 async fn users_can_share_and_manage_public_messages() {
     let temporary = TempDir::new().unwrap();
     let database_path = temporary.path().join("messages.db");
@@ -1617,6 +1818,8 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             chapter_max_upload_bytes: 256 * 1024,
             max_title_length: 60,
             max_chapter_title_length: 80,
+            chapter_comment_max_length: 300,
+            chapter_comment_page_size: 50,
         },
     }
 }

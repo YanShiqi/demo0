@@ -21,16 +21,18 @@ use crate::{
     error::AppError,
     memes::{self, MemeRow, MemeWithTags, NewMeme},
     model::{PageContext, Role, SessionContext, SessionRow, User},
-    novels::{self, NovelChapterPreviewRow, NovelChapterRow, NovelWithChapters},
+    novels::{
+        self, NovelChapterCommentRow, NovelChapterPreviewRow, NovelChapterRow, NovelWithChapters,
+    },
     public_messages::{self, PublicMessageRow},
     time_display,
 };
 use views::{
     AdminMemesTemplate, AdminNovelsTemplate, AdminUserView, AdminUsersTemplate, HomeTemplate,
     LoginTemplate, MemeView, MemesTemplate, MessageView, MessagesTemplate, NewMemeTemplate,
-    NovelChapterPreviewView, NovelChapterTemplate, NovelChapterView, NovelDetailTemplate,
-    NovelView, NovelsTemplate, PasswordChangeRequiredTemplate, PopularTagView, ProfileTemplate,
-    PublicProfileTemplate, RegisterTemplate,
+    NovelChapterCommentView, NovelChapterPreviewView, NovelChapterTemplate, NovelChapterView,
+    NovelDetailTemplate, NovelView, NovelsTemplate, PasswordChangeRequiredTemplate, PopularTagView,
+    ProfileTemplate, PublicProfileTemplate, RegisterTemplate,
 };
 
 #[derive(Deserialize)]
@@ -58,6 +60,18 @@ pub struct CsrfForm {
 pub struct NovelForm {
     csrf_token: String,
     title: String,
+}
+
+#[derive(Deserialize)]
+pub struct NovelCommentForm {
+    csrf_token: String,
+    body: String,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteNovelCommentForm {
+    csrf_token: String,
+    return_to: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -759,21 +773,77 @@ pub async fn novel_chapter_page(
     headers: HeaderMap,
     Path((novel_id, chapter_id)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
-    let (session, _, ctx) = page_context(&state, &headers).await?;
+    let (session, user, ctx) = page_context(&state, &headers).await?;
     let novel = novels::get_novel(&state.pool, &novel_id).await?;
     let chapter = novels::get_chapter(&state.pool, &novel_id, &chapter_id).await?;
+    let current_role = user.as_ref().map(User::parsed_role);
+    let comments: Vec<NovelChapterCommentView> =
+        novels::list_chapter_comments(&state.pool, &chapter_id, &state.config.novels)
+            .await?
+            .into_iter()
+            .map(|comment| {
+                novel_chapter_comment_view(
+                    comment,
+                    current_role,
+                    state.config.display.utc_offset_hours,
+                )
+            })
+            .collect();
+    let has_comments = !comments.is_empty();
+    let chapter_path = format!("/novels/{novel_id}/chapters/{chapter_id}");
     render(
         NovelChapterTemplate {
             ctx,
+            novel_id,
+            chapter_id,
             novel_title: novel.title,
-            novel_href: format!("/novels/{novel_id}"),
+            novel_href: format!("/novels/{}", chapter.novel_id),
             title: chapter.title,
             chapter_number: chapter.chapter_number,
             html: novels::render_markdown(&chapter.markdown),
+            comments,
+            has_comments,
+            authenticated: user.is_some(),
+            comment_max_length: state.config.novels.chapter_comment_max_length,
+            return_to: chapter_path,
         },
         StatusCode::OK,
         session.new_cookie,
     )
+}
+
+pub async fn create_novel_chapter_comment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((novel_id, chapter_id)): Path<(String, String)>,
+    Form(form): Form<NovelCommentForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    let user = require_user(&state, &session).await?;
+    novels::create_chapter_comment(
+        &state.pool,
+        &novel_id,
+        &chapter_id,
+        &user.id,
+        &form.body,
+        &state.config.novels,
+    )
+    .await?;
+    redirect(&format!("/novels/{novel_id}/chapters/{chapter_id}"), None)
+}
+
+pub async fn delete_novel_chapter_comment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(comment_id): Path<String>,
+    Form(form): Form<DeleteNovelCommentForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let _actor = require_admin(&state, &session).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    novels::soft_delete_chapter_comment(&state.pool, &comment_id).await?;
+    redirect(novel_comment_return_to(form.return_to.as_deref()), None)
 }
 
 pub async fn admin_novels(
@@ -1553,6 +1623,19 @@ fn novel_chapter_view(chapter: NovelChapterRow, utc_offset_hours: i8) -> NovelCh
     }
 }
 
+fn novel_chapter_comment_view(
+    comment: NovelChapterCommentRow,
+    current_role: Option<Role>,
+    utc_offset_hours: i8,
+) -> NovelChapterCommentView {
+    NovelChapterCommentView {
+        id: comment.id,
+        body: comment.body,
+        created_at: time_display::friendly_rfc3339(&comment.created_at, utc_offset_hours),
+        can_delete: current_role.is_some_and(|role| matches!(role, Role::Admin | Role::SuperAdmin)),
+    }
+}
+
 fn popular_tag_view(tag: memes::PopularTag, selected_tag: &str) -> PopularTagView {
     let selected_tag = selected_tag.trim();
     let is_active = !selected_tag.is_empty() && selected_tag == tag.name;
@@ -1585,6 +1668,14 @@ fn admin_meme_return_to(value: Option<&str>) -> &str {
     match value {
         Some(value) if value == "/admin/memes" || value.starts_with("/admin/memes?") => value,
         _ => "/admin/memes",
+    }
+}
+
+fn novel_comment_return_to(value: Option<&str>) -> &str {
+    match value {
+        // 评论删除后只允许回到公开小说页面，避免表单把管理员带到任意外部地址。
+        Some(value) if value.starts_with("/novels/") => value,
+        _ => "/novels",
     }
 }
 

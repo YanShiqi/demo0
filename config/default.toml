@@ -67,3 +67,7 @@ chapter_max_upload_bytes = 262144
 max_title_length = 60
 # 章节标题最大可见字符数。
 max_chapter_title_length = 80
+# 单条章节匿名评论最大可见字符数；支持中文、换行和 emoji。
+chapter_comment_max_length = 300
+# 单个章节页面默认展示的评论数量。
+chapter_comment_page_size = 50

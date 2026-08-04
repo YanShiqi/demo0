@@ -35,6 +35,13 @@ pub struct NovelChapterPreviewRow {
     pub updated_at: String,
 }
 
+#[derive(Clone, Debug, FromRow)]
+pub struct NovelChapterCommentRow {
+    pub id: String,
+    pub body: String,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct NovelWithChapters {
     pub novel: NovelRow,
@@ -69,6 +76,27 @@ pub fn validate_chapter_upload(
     }
     String::from_utf8(bytes.to_vec())
         .map_err(|_| AppError::BadRequest("章节 Markdown 必须是 UTF-8 文本".to_owned()))
+}
+
+pub fn validate_chapter_comment(body: &str, config: &NovelConfig) -> Result<String, AppError> {
+    let body = body.trim().replace("\r\n", "\n").replace('\r', "\n");
+    let length = body.graphemes(true).count();
+    // 评论按字素簇计数，中文、emoji 和组合字符都按用户看到的“一个字”处理。
+    if length == 0 || length > config.chapter_comment_max_length {
+        return Err(AppError::BadRequest(format!(
+            "评论内容须为 1～{} 个字符",
+            config.chapter_comment_max_length
+        )));
+    }
+    if body
+        .chars()
+        .any(|character| character.is_control() && character != '\n' && character != '\t')
+    {
+        return Err(AppError::BadRequest(
+            "评论内容不能包含特殊控制字符".to_owned(),
+        ));
+    }
+    Ok(body)
 }
 
 pub async fn create_novel(
@@ -150,6 +178,73 @@ pub async fn create_chapter(
         .await?;
     transaction.commit().await?;
     Ok(id)
+}
+
+pub async fn create_chapter_comment(
+    pool: &SqlitePool,
+    novel_id: &str,
+    chapter_id: &str,
+    author_user_id: &str,
+    body: &str,
+    config: &NovelConfig,
+) -> Result<String, AppError> {
+    let body = validate_chapter_comment(body, config)?;
+    let exists = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM novel_chapters JOIN novels ON novels.id = novel_chapters.novel_id WHERE novels.id = ? AND novel_chapters.id = ? AND novels.deleted_at IS NULL AND novel_chapters.deleted_at IS NULL",
+    )
+    .bind(novel_id)
+    .bind(chapter_id)
+    .fetch_one(pool)
+    .await?;
+    if exists == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    let id = Ulid::new().to_string();
+    let now = now_string()?;
+    sqlx::query(
+        "INSERT INTO novel_chapter_comments (id, chapter_id, author_user_id, body, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(chapter_id)
+    .bind(author_user_id)
+    .bind(body)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+pub async fn list_chapter_comments(
+    pool: &SqlitePool,
+    chapter_id: &str,
+    config: &NovelConfig,
+) -> Result<Vec<NovelChapterCommentRow>, AppError> {
+    Ok(sqlx::query_as::<_, NovelChapterCommentRow>(
+        "SELECT id, body, created_at FROM novel_chapter_comments WHERE chapter_id = ? AND deleted_at IS NULL ORDER BY created_at ASC, id ASC LIMIT ?",
+    )
+    .bind(chapter_id)
+    .bind(config.chapter_comment_page_size)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn soft_delete_chapter_comment(
+    pool: &SqlitePool,
+    comment_id: &str,
+) -> Result<(), AppError> {
+    let now = now_string()?;
+    let result = sqlx::query(
+        "UPDATE novel_chapter_comments SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(&now)
+    .bind(comment_id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(())
 }
 
 pub async fn list_recent_chapters(

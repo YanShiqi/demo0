@@ -9,5 +9,51 @@
 <article class="panel novel-reading">
   {{ html|safe }}
 </article>
-{% endblock %}
 
+<section class="panel chapter-comments" aria-labelledby="chapter-comments-title">
+  <div class="section-heading compact-heading">
+    <div>
+      <p class="eyebrow">COMMENTS</p>
+      <h2 id="chapter-comments-title">匿名评论</h2>
+    </div>
+    <p>前台只显示匿名读者</p>
+  </div>
+
+  {% if authenticated %}
+    <form action="/novels/{{ novel_id }}/chapters/{{ chapter_id }}/comments" method="post" class="comment-form">
+      <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+      <label for="chapter-comment">写下你的想法</label>
+      <textarea id="chapter-comment" name="body" rows="4" maxlength="{{ comment_max_length }}" placeholder="支持中文、换行和 emoji，比如 🐷" required></textarea>
+      <div class="form-actions">
+        <span class="hint">最多 {{ comment_max_length }} 个字符；发布后将匿名展示。</span>
+        <button type="submit">发表评论</button>
+      </div>
+    </form>
+  {% else %}
+    <p class="empty-state">登录后可以匿名评论。</p>
+  {% endif %}
+
+  {% if has_comments %}
+    <div class="comment-list">
+      {% for comment in comments %}
+        <article class="anonymous-comment">
+          <div class="comment-meta">
+            <span class="anonymous-name">匿名读者</span>
+            <time>{{ comment.created_at }}</time>
+          </div>
+          <p>{{ comment.body }}</p>
+          {% if comment.can_delete %}
+            <form action="/admin/novels/comments/{{ comment.id }}/delete" method="post" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <button class="link-button danger-link" type="submit">删除评论</button>
+            </form>
+          {% endif %}
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="empty-state">还没有评论，适合留下一句轻轻的脚印。</p>
+  {% endif %}
+</section>
+{% endblock %}

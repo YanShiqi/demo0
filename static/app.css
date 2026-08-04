@@ -498,6 +498,63 @@ small {
     border-radius: 14px;
 }
 
+.chapter-comments {
+    max-width: 760px;
+    margin-right: auto;
+    margin-left: auto;
+}
+
+.compact-heading {
+    align-items: center;
+    margin-bottom: 18px;
+}
+
+.compact-heading h2 {
+    margin: 0;
+}
+
+.comment-form {
+    display: grid;
+    gap: 14px;
+    margin-bottom: 22px;
+}
+
+.comment-list {
+    display: grid;
+    gap: 14px;
+}
+
+.anonymous-comment {
+    padding: 18px;
+    background: rgba(23, 37, 34, 0.72);
+    border: 1px solid rgba(98, 199, 182, 0.12);
+    border-radius: 18px;
+}
+
+.anonymous-comment p {
+    line-height: 1.75;
+    white-space: pre-wrap;
+}
+
+.comment-meta,
+.form-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.anonymous-name {
+    color: var(--teal);
+    font-weight: 800;
+}
+
+.hint {
+    color: var(--muted);
+}
+
 .panel {
     margin-bottom: 26px;
     padding: 26px;

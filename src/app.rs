@@ -56,6 +56,10 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
             "/novels/{novel_id}/chapters/{chapter_id}",
             get(web::novel_chapter_page),
         )
+        .route(
+            "/novels/{novel_id}/chapters/{chapter_id}/comments",
+            axum::routing::post(web::create_novel_chapter_comment),
+        )
         .route("/admin/memes", get(web::admin_memes))
         .route(
             "/admin/memes/{id}/approve",
@@ -98,6 +102,10 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         .route(
             "/admin/novels/{novel_id}/chapters/{chapter_id}/delete",
             axum::routing::post(web::delete_novel_chapter),
+        )
+        .route(
+            "/admin/novels/comments/{comment_id}/delete",
+            axum::routing::post(web::delete_novel_chapter_comment),
         )
         .route("/static/app.css", get(web::app_css))
         .fallback(web::not_found)
