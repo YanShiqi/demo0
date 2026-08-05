@@ -163,7 +163,6 @@ pub struct NovelView {
 pub struct NovelChapterView {
     pub id: String,
     pub title: String,
-    pub chapter_number: i64,
     pub updated_at: String,
     pub href: String,
 }

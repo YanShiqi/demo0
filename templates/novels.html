@@ -15,7 +15,7 @@
     {% if novel.has_chapters %}
     <ol class="chapter-list">
       {% for chapter in novel.chapters %}
-      <li><a href="{{ chapter.href }}">第 {{ chapter.chapter_number }} 章 {{ chapter.title }}</a></li>
+      <li><a href="{{ chapter.href }}">{{ chapter.title }}</a></li>
       {% endfor %}
     </ol>
     {% else %}
@@ -28,4 +28,3 @@
 <section class="panel empty-state"><p>还没有连载小说。</p></section>
 {% endif %}
 {% endblock %}
-

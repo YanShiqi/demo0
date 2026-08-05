@@ -1618,7 +1618,6 @@ fn novel_chapter_view(chapter: NovelChapterRow, utc_offset_hours: i8) -> NovelCh
         href: format!("/novels/{}/chapters/{}", chapter.novel_id, chapter.id),
         id: chapter.id,
         title: chapter.title,
-        chapter_number: chapter.chapter_number,
         updated_at: time_display::friendly_rfc3339(&chapter.updated_at, utc_offset_hours),
     }
 }

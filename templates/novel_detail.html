@@ -11,7 +11,7 @@
   {% if novel.has_chapters %}
   <ol class="chapter-list">
     {% for chapter in novel.chapters %}
-    <li><a href="{{ chapter.href }}">第 {{ chapter.chapter_number }} 章 {{ chapter.title }}</a><span class="muted">{{ chapter.updated_at }}</span></li>
+    <li><a href="{{ chapter.href }}">{{ chapter.title }}</a><span class="muted">{{ chapter.updated_at }}</span></li>
     {% endfor %}
   </ol>
   {% else %}
@@ -19,4 +19,3 @@
   {% endif %}
 </section>
 {% endblock %}
-

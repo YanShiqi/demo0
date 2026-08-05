@@ -642,7 +642,7 @@ async fn super_admin_can_publish_serialized_novel_chapters() {
     let chapter_markdown = "# 开头\n\n这是一段**正文**。\n\n<script>alert(1)</script>";
     let chapter_body = multipart_body(
         &admin_csrf,
-        &[("title", "第一章 风起")],
+        &[("title", "风起")],
         "chapter",
         "chapter.md",
         "text/markdown",
@@ -654,7 +654,7 @@ async fn super_admin_can_publish_serialized_novel_chapters() {
             Request::builder()
                 .method("POST")
                 .uri(format!("/admin/novels/{novel_id}/chapters"))
-                .header(header::COOKIE, admin_cookie)
+                .header(header::COOKIE, admin_cookie.clone())
                 .header(
                     header::CONTENT_TYPE,
                     format!("multipart/form-data; boundary={MULTIPART_BOUNDARY}"),
@@ -688,7 +688,8 @@ async fn super_admin_can_publish_serialized_novel_chapters() {
     let home_html = response_html(home_response).await;
     assert!(home_html.contains("aria-current=\"page\">连载小说"));
     assert!(home_html.contains("雪中小猪"));
-    assert!(home_html.contains("第一章 风起"));
+    assert!(home_html.contains("1. 风起"));
+    assert!(!home_html.contains("第 1 章 风起"));
 
     let list_html = response_html(
         router
@@ -704,6 +705,9 @@ async fn super_admin_can_publish_serialized_novel_chapters() {
     )
     .await;
     assert!(list_html.contains("雪中小猪"));
+    assert!(list_html.contains(">风起</a>"));
+    assert!(!list_html.contains(">1. 风起</a>"));
+    assert!(!list_html.contains("第 1 章 风起"));
 
     let detail_html = response_html(
         router
@@ -718,7 +722,26 @@ async fn super_admin_can_publish_serialized_novel_chapters() {
             .unwrap(),
     )
     .await;
-    assert!(detail_html.contains("第一章 风起"));
+    assert!(detail_html.contains(">风起</a>"));
+    assert!(!detail_html.contains(">1. 风起</a>"));
+    assert!(!detail_html.contains("第 1 章 风起"));
+
+    let admin_list_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/admin/novels")
+                    .header(header::COOKIE, admin_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(admin_list_html.contains(">风起</a>"));
+    assert!(!admin_list_html.contains(">1. 风起</a>"));
 
     let chapter_html = response_html(
         router
@@ -733,6 +756,9 @@ async fn super_admin_can_publish_serialized_novel_chapters() {
     )
     .await;
     assert!(chapter_html.contains("<strong>正文</strong>"));
+    assert!(chapter_html.contains(">1.<"));
+    assert!(chapter_html.contains("<h1>风起</h1>"));
+    assert!(!chapter_html.contains("CHAPTER 1"));
     assert!(!chapter_html.contains("<script"));
     assert!(!chapter_html.contains("alert(1)"));
 }

@@ -39,7 +39,7 @@
     <ol class="chapter-list">
       {% for chapter in novel.chapters %}
       <li>
-        <a href="{{ chapter.href }}">第 {{ chapter.chapter_number }} 章 {{ chapter.title }}</a>
+        <a href="{{ chapter.href }}">{{ chapter.title }}</a>
         <form action="/admin/novels/{{ novel.id }}/chapters/{{ chapter.id }}/delete" method="post" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
           <button class="link-button danger-link" type="submit">删除章节</button>
@@ -57,4 +57,3 @@
 <section class="panel empty-state"><p>还没有小说，先新增一本吧。</p></section>
 {% endif %}
 {% endblock %}
-

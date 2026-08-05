@@ -97,7 +97,7 @@
             {% if has_novel_chapter_previews %}
               {% for chapter in novel_chapter_previews %}
               <article class="novel-card">
-                <a href="{{ chapter.href }}"><strong>{{ chapter.novel_title }}</strong> · 第 {{ chapter.chapter_number }} 章 {{ chapter.chapter_title }}</a>
+                <a href="{{ chapter.href }}"><strong>{{ chapter.novel_title }}</strong> · {{ chapter.chapter_number }}. {{ chapter.chapter_title }}</a>
                 <p class="muted">{{ chapter.updated_at }}</p>
               </article>
               {% endfor %}
