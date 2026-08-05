@@ -305,6 +305,29 @@ pub async fn get_chapter(
     .ok_or(AppError::NotFound)
 }
 
+pub async fn adjacent_chapters(
+    pool: &SqlitePool,
+    novel_id: &str,
+    chapter_number: i64,
+) -> Result<(Option<NovelChapterRow>, Option<NovelChapterRow>), AppError> {
+    // 上一章/下一章只在当前小说的未删除章节内查找，避免误链到已软删除内容。
+    let previous = sqlx::query_as::<_, NovelChapterRow>(
+        "SELECT id, novel_id, title, chapter_number, markdown, created_at, updated_at FROM novel_chapters WHERE novel_id = ? AND deleted_at IS NULL AND chapter_number < ? ORDER BY chapter_number DESC, id DESC LIMIT 1",
+    )
+    .bind(novel_id)
+    .bind(chapter_number)
+    .fetch_optional(pool)
+    .await?;
+    let next = sqlx::query_as::<_, NovelChapterRow>(
+        "SELECT id, novel_id, title, chapter_number, markdown, created_at, updated_at FROM novel_chapters WHERE novel_id = ? AND deleted_at IS NULL AND chapter_number > ? ORDER BY chapter_number ASC, id ASC LIMIT 1",
+    )
+    .bind(novel_id)
+    .bind(chapter_number)
+    .fetch_optional(pool)
+    .await?;
+    Ok((previous, next))
+}
+
 pub async fn list_novels_with_chapters(
     pool: &SqlitePool,
 ) -> Result<Vec<NovelWithChapters>, AppError> {

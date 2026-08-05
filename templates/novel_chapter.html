@@ -10,6 +10,17 @@
   {{ html|safe }}
 </article>
 
+{% if has_previous_chapter || has_next_chapter %}
+<nav class="chapter-navigation" aria-label="章节导航">
+  {% if has_previous_chapter %}
+    <a class="button secondary" href="{{ previous_chapter_href }}">← 上一章：{{ previous_chapter_title }}</a>
+  {% endif %}
+  {% if has_next_chapter %}
+    <a class="button" href="{{ next_chapter_href }}">下一章：{{ next_chapter_title }} →</a>
+  {% endif %}
+</nav>
+{% endif %}
+
 <section class="panel chapter-comments" aria-labelledby="chapter-comments-title">
   <div class="section-heading compact-heading">
     <div>

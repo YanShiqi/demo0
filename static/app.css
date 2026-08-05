@@ -498,6 +498,18 @@ small {
     border-radius: 14px;
 }
 
+.chapter-navigation {
+    display: flex;
+    gap: 14px;
+    justify-content: space-between;
+    max-width: 760px;
+    margin: -8px auto 26px;
+}
+
+.chapter-navigation a {
+    min-width: 0;
+}
+
 .chapter-comments {
     max-width: 760px;
     margin-right: auto;

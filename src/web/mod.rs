@@ -776,6 +776,12 @@ pub async fn novel_chapter_page(
     let (session, user, ctx) = page_context(&state, &headers).await?;
     let novel = novels::get_novel(&state.pool, &novel_id).await?;
     let chapter = novels::get_chapter(&state.pool, &novel_id, &chapter_id).await?;
+    let (previous_chapter, next_chapter) =
+        novels::adjacent_chapters(&state.pool, &novel_id, chapter.chapter_number).await?;
+    let (has_previous_chapter, previous_chapter_href, previous_chapter_title) =
+        novel_chapter_navigation_values(previous_chapter);
+    let (has_next_chapter, next_chapter_href, next_chapter_title) =
+        novel_chapter_navigation_values(next_chapter);
     let current_role = user.as_ref().map(User::parsed_role);
     let comments: Vec<NovelChapterCommentView> =
         novels::list_chapter_comments(&state.pool, &chapter_id, &state.config.novels)
@@ -801,6 +807,12 @@ pub async fn novel_chapter_page(
             title: chapter.title,
             chapter_number: chapter.chapter_number,
             html: novels::render_markdown(&chapter.markdown),
+            has_previous_chapter,
+            previous_chapter_href,
+            previous_chapter_title,
+            has_next_chapter,
+            next_chapter_href,
+            next_chapter_title,
             comments,
             has_comments,
             authenticated: user.is_some(),
@@ -1620,6 +1632,17 @@ fn novel_chapter_view(chapter: NovelChapterRow, utc_offset_hours: i8) -> NovelCh
         title: chapter.title,
         updated_at: time_display::friendly_rfc3339(&chapter.updated_at, utc_offset_hours),
     }
+}
+
+fn novel_chapter_navigation_values(chapter: Option<NovelChapterRow>) -> (bool, String, String) {
+    if let Some(chapter) = chapter {
+        return (
+            true,
+            format!("/novels/{}/chapters/{}", chapter.novel_id, chapter.id),
+            chapter.title,
+        );
+    }
+    (false, String::new(), String::new())
 }
 
 fn novel_chapter_comment_view(

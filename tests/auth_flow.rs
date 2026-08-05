@@ -801,6 +801,91 @@ async fn only_super_admin_can_manage_novels() {
 }
 
 #[tokio::test]
+async fn novel_chapter_pages_show_previous_and_next_navigation() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("novel-navigation.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let novel_id = novels::create_novel(&pool, "章节导航小说", &config.novels)
+        .await
+        .unwrap();
+    let first_id = novels::create_chapter(&pool, &novel_id, "序章", "序章正文", &config.novels)
+        .await
+        .unwrap();
+    let middle_id =
+        novels::create_chapter(&pool, &novel_id, "盛大登场", "中间正文", &config.novels)
+            .await
+            .unwrap();
+    let deleted_id = novels::create_chapter(
+        &pool,
+        &novel_id,
+        "会被隐藏的一章",
+        "隐藏正文",
+        &config.novels,
+    )
+    .await
+    .unwrap();
+    novels::soft_delete_chapter(&pool, &novel_id, &deleted_id)
+        .await
+        .unwrap();
+    let last_id = novels::create_chapter(&pool, &novel_id, "余波", "余波正文", &config.novels)
+        .await
+        .unwrap();
+    let router = app::build(pool, config);
+
+    let middle_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/novels/{novel_id}/chapters/{middle_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(middle_html.contains("← 上一章：序章"));
+    assert!(middle_html.contains(&format!("/novels/{novel_id}/chapters/{first_id}")));
+    assert!(middle_html.contains("下一章：余波 →"));
+    assert!(middle_html.contains(&format!("/novels/{novel_id}/chapters/{last_id}")));
+    assert!(!middle_html.contains("会被隐藏的一章"));
+
+    let first_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/novels/{novel_id}/chapters/{first_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(!first_html.contains("上一章："));
+    assert!(first_html.contains("下一章：盛大登场 →"));
+
+    let last_html = response_html(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/novels/{novel_id}/chapters/{last_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(last_html.contains("← 上一章：盛大登场"));
+    assert!(!last_html.contains("下一章："));
+}
+
+#[tokio::test]
 async fn super_admin_can_soft_delete_novels_and_chapters() {
     let temporary = TempDir::new().unwrap();
     let database_path = temporary.path().join("novel-deletions.db");
