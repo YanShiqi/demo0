@@ -358,41 +358,15 @@ pub async fn soft_delete_chapter(
 }
 
 pub fn render_markdown(markdown: &str) -> String {
-    let mut output = String::new();
-    let mut in_script_block = false;
-    for line in markdown.lines() {
-        let trimmed = line.trim();
-        let lower = trimmed.to_lowercase();
-        if in_script_block {
-            if lower.contains("</script>") {
-                in_script_block = false;
-            }
-            continue;
-        }
-        if lower.starts_with("<script") {
-            if !lower.contains("</script>") {
-                in_script_block = true;
-            }
-            continue;
-        }
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(title) = trimmed.strip_prefix("# ") {
-            output.push_str("<h1>");
-            output.push_str(&render_inline_markdown(title));
-            output.push_str("</h1>\n");
-        } else if let Some(title) = trimmed.strip_prefix("## ") {
-            output.push_str("<h2>");
-            output.push_str(&render_inline_markdown(title));
-            output.push_str("</h2>\n");
-        } else {
-            output.push_str("<p>");
-            output.push_str(&render_inline_markdown(trimmed));
-            output.push_str("</p>\n");
-        }
-    }
-    output
+    let mut options = pulldown_cmark::Options::empty();
+    options.insert(pulldown_cmark::Options::ENABLE_TABLES);
+    options.insert(pulldown_cmark::Options::ENABLE_STRIKETHROUGH);
+    options.insert(pulldown_cmark::Options::ENABLE_TASKLISTS);
+    let parser = pulldown_cmark::Parser::new_ext(markdown, options);
+    let mut html = String::new();
+    pulldown_cmark::html::push_html(&mut html, parser);
+    // Markdown 允许内嵌 HTML；这里统一经过 ammonia 白名单清理，避免脚本和危险属性进入页面。
+    ammonia::clean(&html).to_string()
 }
 
 fn validate_title(
@@ -414,39 +388,28 @@ fn validate_title(
     Ok((title, key))
 }
 
-fn render_inline_markdown(input: &str) -> String {
-    let mut output = String::new();
-    let mut strong_open = false;
-    for part in input.split("**") {
-        if strong_open {
-            output.push_str("<strong>");
-            output.push_str(&escape_html(part));
-            output.push_str("</strong>");
-        } else {
-            output.push_str(&escape_html(part));
-        }
-        strong_open = !strong_open;
-    }
-    output
-}
-
-fn escape_html(input: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    for character in input.chars() {
-        match character {
-            '&' => output.push_str("&amp;"),
-            '<' => output.push_str("&lt;"),
-            '>' => output.push_str("&gt;"),
-            '"' => output.push_str("&quot;"),
-            '\'' => output.push_str("&#x27;"),
-            _ => output.push(character),
-        }
-    }
-    output
-}
-
 fn now_string() -> Result<String, AppError> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .map_err(|error| AppError::Internal(format!("格式化小说时间失败：{error}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renders_common_markdown_blocks_and_sanitizes_html() {
+        let html = render_markdown(
+            "### 第 1 章 盛大登场\n\n- 第一件事\n- 第二件事\n\n[回首页](/)\n\n<script>alert(1)</script>",
+        );
+
+        assert!(html.contains("<h3>第 1 章 盛大登场</h3>"));
+        assert!(html.contains("<ul>"));
+        assert!(html.contains("<li>第一件事</li>"));
+        assert!(html.contains("<a href=\"/\""));
+        assert!(!html.contains("### 第 1 章"));
+        assert!(!html.contains("<script"));
+        assert!(!html.contains("alert(1)"));
+    }
 }
