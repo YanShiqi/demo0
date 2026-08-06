@@ -437,7 +437,7 @@ pub async fn create_message(
     match public_messages::create(&state.pool, &user.id, &form.body, &state.config.messages).await {
         Ok(()) => redirect("/messages", None),
         Err(AppError::BadRequest(message)) => {
-            let ctx = PageContext::authenticated(session.csrf_token.clone(), &user);
+            let ctx = page_context_for_user(&state, session.csrf_token.clone(), &user).await?;
             render_messages(&state, None, ctx, Some(&user), Some(&message), form.body).await
         }
         Err(error) => Err(error),
@@ -715,7 +715,7 @@ pub async fn admin_memes(
     let has_memes = !memes.is_empty();
     render(
         AdminMemesTemplate {
-            ctx: PageContext::authenticated(session.csrf_token, &actor),
+            ctx: page_context_for_user(&state, session.csrf_token, &actor).await?,
             memes,
             has_memes,
             pending_filter_active: status_filter.is_pending(),
@@ -1274,7 +1274,7 @@ pub async fn admin_users(
             }
         })
         .collect();
-    let ctx = PageContext::authenticated(session.csrf_token, &actor);
+    let ctx = page_context_for_user(&state, session.csrf_token, &actor).await?;
     let reset_user = query
         .password_reset
         .as_deref()
@@ -1405,10 +1405,24 @@ async fn page_context(
     let session = auth::load_or_create_session(&state.pool, &state.config, headers).await?;
     let user = auth::current_user(&state.pool, &session.row).await?;
     let ctx = match &user {
-        Some(user) => PageContext::authenticated(session.row.csrf_token.clone(), user),
+        Some(user) => page_context_for_user(state, session.row.csrf_token.clone(), user).await?,
         None => PageContext::anonymous(session.row.csrf_token.clone()),
     };
     Ok((session, user, ctx))
+}
+
+async fn page_context_for_user(
+    state: &AppState,
+    csrf_token: String,
+    user: &User,
+) -> Result<PageContext, AppError> {
+    let ctx = PageContext::authenticated(csrf_token, user);
+    if !matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin) {
+        return Ok(ctx);
+    }
+    // 只有管理员能看到审核入口，因此只在这里额外查询待审核数量，避免普通页面多一次数据库访问。
+    let pending_meme_count = memes::count_pending(&state.pool).await?;
+    Ok(ctx.with_pending_meme_count(pending_meme_count))
 }
 
 async fn require_user(state: &AppState, session: &SessionRow) -> Result<User, AppError> {
@@ -1463,7 +1477,7 @@ async fn render_admin_novels(
     let has_novels = !novels.is_empty();
     render(
         AdminNovelsTemplate {
-            ctx: PageContext::authenticated(session.csrf_token.clone(), actor),
+            ctx: page_context_for_user(state, session.csrf_token.clone(), actor).await?,
             novels,
             has_novels,
             max_upload_kib: state.config.novels.chapter_max_upload_bytes / 1024,
@@ -1497,7 +1511,7 @@ async fn render_profile(
     let has_memes = !memes.is_empty();
     render(
         ProfileTemplate {
-            ctx: PageContext::authenticated(session.csrf_token.clone(), user),
+            ctx: page_context_for_user(state, session.csrf_token.clone(), user).await?,
             user_id: user.id.clone(),
             username: user.username.clone(),
             nickname: user.nickname.clone(),
@@ -1571,7 +1585,7 @@ async fn render_new_meme(
 ) -> Result<Response, AppError> {
     render(
         NewMemeTemplate {
-            ctx: PageContext::authenticated(session.csrf_token.clone(), user),
+            ctx: page_context_for_user(state, session.csrf_token.clone(), user).await?,
             has_error: error.is_some(),
             error: error.unwrap_or_default().to_owned(),
             title,

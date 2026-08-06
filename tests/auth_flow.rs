@@ -1354,6 +1354,96 @@ async fn new_meme_page_includes_client_side_image_preview() {
 }
 
 #[tokio::test]
+async fn admin_navigation_highlights_pending_memes() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("meme-nav-alert.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let author = auth::create_user(
+        &pool,
+        "meme_nav_author",
+        "待审作者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "meme_nav_admin",
+        "待审管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    let meme_id = memes::create(
+        &pool,
+        &author,
+        NewMeme {
+            storage_name: "pending-nav.png".to_owned(),
+            media_type: "image/png".to_owned(),
+            title: "待审导航提示".to_owned(),
+            tags: vec!["提示".to_owned()],
+        },
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool.clone(), test_config(&temporary, database_url));
+
+    let user_cookie = sign_in(&router, &author.username, "127.0.0.1:43136").await;
+    let user_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/profile")
+                .header(header::COOKIE, user_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(user_response.status(), StatusCode::OK);
+    let user_html = response_html(user_response).await;
+    assert!(!user_html.contains("Meme 审核"));
+
+    let admin_cookie = sign_in(&router, &admin.username, "127.0.0.1:43137").await;
+    let admin_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/profile")
+                .header(header::COOKIE, admin_cookie.clone())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admin_response.status(), StatusCode::OK);
+    let admin_html = response_html(admin_response).await;
+    assert!(admin_html.contains("admin-nav-alert"));
+    assert!(admin_html.contains("Meme 审核"));
+    assert!(admin_html.contains("<span class=\"nav-badge\">1</span>"));
+
+    memes::approve(&pool, &meme_id, &admin).await.unwrap();
+    let cleared_response = router
+        .oneshot(
+            Request::builder()
+                .uri("/profile")
+                .header(header::COOKIE, admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared_response.status(), StatusCode::OK);
+    let cleared_html = response_html(cleared_response).await;
+    assert!(cleared_html.contains("Meme 审核"));
+    assert!(!cleared_html.contains("admin-nav-alert"));
+    assert!(!cleared_html.contains("class=\"nav-badge\""));
+}
+
+#[tokio::test]
 async fn memes_require_review_before_public_listing() {
     let temporary = TempDir::new().unwrap();
     let database_path = temporary.path().join("memes.db");

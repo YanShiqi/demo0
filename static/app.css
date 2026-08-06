@@ -72,6 +72,54 @@ body {
     color: var(--teal);
 }
 
+.site-header nav a.admin-nav-alert {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 12px;
+    color: #07110f;
+    font-weight: 800;
+    background: var(--coral);
+    border-radius: 999px;
+    box-shadow: 0 0 22px rgba(255, 152, 127, 0.26);
+}
+
+.site-header nav a.admin-nav-alert:hover {
+    color: #07110f;
+    background: #ffad98;
+}
+
+.nav-badge {
+    min-width: 24px;
+    padding: 2px 7px;
+    color: #fff8f4;
+    font-size: 12px;
+    line-height: 1.5;
+    text-align: center;
+    background: #b83223;
+    border-radius: 999px;
+    animation: nav-badge-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes nav-badge-pulse {
+    0%,
+    100% {
+        box-shadow: 0 0 0 rgba(255, 180, 165, 0);
+        transform: scale(1);
+    }
+
+    50% {
+        box-shadow: 0 0 14px rgba(255, 180, 165, 0.82);
+        transform: scale(1.08);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .nav-badge {
+        animation: none;
+    }
+}
+
 .link-button {
     padding: 0;
     cursor: pointer;

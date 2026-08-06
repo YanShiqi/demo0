@@ -15,7 +15,13 @@
       <a href="/novels">小说</a>
       {% if ctx.authenticated %}
         <a href="/profile">{{ ctx.nickname }}</a>
-        {% if ctx.is_admin %}<a href="/admin/memes">Meme 审核</a>{% endif %}
+        {% if ctx.is_admin %}
+          {% if ctx.has_pending_memes %}
+            <a class="admin-nav-alert" href="/admin/memes" aria-label="Meme 审核，当前有 {{ ctx.pending_meme_count }} 条待审核">Meme 审核 <span class="nav-badge">{{ ctx.pending_meme_count }}</span></a>
+          {% else %}
+            <a href="/admin/memes">Meme 审核</a>
+          {% endif %}
+        {% endif %}
         {% if ctx.is_super_admin %}<a href="/admin/users">用户管理</a>{% endif %}
         {% if ctx.is_super_admin %}<a href="/admin/novels">小说管理</a>{% endif %}
         <form action="/logout" method="post" class="inline-form">

@@ -226,6 +226,14 @@ pub async fn create(
     Ok(meme_id)
 }
 
+pub async fn count_pending(pool: &SqlitePool) -> Result<i64, AppError> {
+    sqlx::query_scalar("SELECT COUNT(*) FROM memes WHERE status = ?")
+        .bind(STATUS_PENDING)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
+}
+
 pub async fn list_approved(
     pool: &SqlitePool,
     tag: Option<&str>,

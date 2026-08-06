@@ -92,6 +92,8 @@ pub struct PageContext {
     pub nickname: String,
     pub is_admin: bool,
     pub is_super_admin: bool,
+    pub pending_meme_count: i64,
+    pub has_pending_memes: bool,
 }
 
 impl PageContext {
@@ -102,6 +104,8 @@ impl PageContext {
             nickname: String::new(),
             is_admin: false,
             is_super_admin: false,
+            pending_meme_count: 0,
+            has_pending_memes: false,
         }
     }
 
@@ -112,6 +116,14 @@ impl PageContext {
             nickname: user.nickname.clone(),
             is_admin: matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin),
             is_super_admin: user.parsed_role() == Role::SuperAdmin,
+            pending_meme_count: 0,
+            has_pending_memes: false,
         }
+    }
+
+    pub const fn with_pending_meme_count(mut self, pending_meme_count: i64) -> Self {
+        self.pending_meme_count = pending_meme_count;
+        self.has_pending_memes = pending_meme_count > 0;
+        self
     }
 }
