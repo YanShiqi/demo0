@@ -328,6 +328,35 @@ textarea:focus {
     border-color: var(--teal);
 }
 
+.meme-upload-preview {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    background: rgba(23, 37, 34, 0.78);
+    border: 1px solid rgba(98, 199, 182, 0.18);
+    border-radius: 16px;
+}
+
+.meme-upload-preview[hidden] {
+    display: none;
+}
+
+.meme-upload-preview-title {
+    margin: 0;
+    color: var(--teal);
+    font-weight: 800;
+}
+
+.meme-upload-preview img {
+    display: block;
+    width: 100%;
+    max-height: 360px;
+    object-fit: contain;
+    background: #08110f;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+}
+
 small {
     color: var(--muted);
     font-weight: 400;

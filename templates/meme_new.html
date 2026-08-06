@@ -19,7 +19,56 @@
     <input id="meme" name="meme" type="file" accept="image/png,image/jpeg,image/gif" required>
     <p class="form-hint">支持 PNG、JPEG、GIF，最大 {{ max_upload_kib }} KiB。</p>
 
+    <div id="meme-preview" class="meme-upload-preview" hidden>
+      <p class="meme-upload-preview-title">上传前预览</p>
+      <img id="meme-preview-image" alt="待提交 Meme 预览">
+      <p id="meme-preview-meta" class="form-hint"></p>
+    </div>
+
     <button class="button full" type="submit">提交审核</button>
   </form>
 </section>
+<script>
+(() => {
+  const meme = document.querySelector("#meme");
+  const preview = document.querySelector("#meme-preview");
+  const image = document.querySelector("#meme-preview-image");
+  const meta = document.querySelector("#meme-preview-meta");
+  const BYTES_PER_KIB = 1024;
+  let objectUrl = null;
+
+  if (!meme || !preview || !image || !meta) {
+    return;
+  }
+
+  const clearPreview = () => {
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+      objectUrl = null;
+    }
+    image.removeAttribute("src");
+    meta.textContent = "";
+    preview.hidden = true;
+  };
+
+  meme.addEventListener("change", () => {
+    const file = meme.files && meme.files[0];
+    if (!file) {
+      clearPreview();
+      return;
+    }
+
+    // 只在浏览器本地生成预览地址，不会提前上传文件。
+    if (objectUrl) {
+      URL.revokeObjectURL(objectUrl);
+    }
+    objectUrl = URL.createObjectURL(file);
+    image.src = objectUrl;
+    meta.textContent = `${file.name} · ${Math.ceil(file.size / BYTES_PER_KIB)} KiB`;
+    preview.hidden = false;
+  });
+
+  window.addEventListener("pagehide", clearPreview);
+})();
+</script>
 {% endblock %}

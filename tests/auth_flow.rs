@@ -1317,6 +1317,43 @@ async fn users_can_share_and_manage_public_messages() {
 }
 
 #[tokio::test]
+async fn new_meme_page_includes_client_side_image_preview() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("meme-preview.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let user = auth::create_user(
+        &pool,
+        "meme_preview_user",
+        "预览用户",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool, test_config(&temporary, database_url));
+    let user_cookie = sign_in(&router, &user.username, "127.0.0.1:43134").await;
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/memes/new")
+                .header(header::COOKIE, user_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = response_html(response).await;
+    assert!(html.contains("id=\"meme-preview\""));
+    assert!(html.contains("id=\"meme-preview-image\""));
+    assert!(html.contains("id=\"meme-preview-meta\""));
+    assert!(html.contains("URL.createObjectURL"));
+    assert!(html.contains("meme.addEventListener(\"change\""));
+}
+
+#[tokio::test]
 async fn memes_require_review_before_public_listing() {
     let temporary = TempDir::new().unwrap();
     let database_path = temporary.path().join("memes.db");
