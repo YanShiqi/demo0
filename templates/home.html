@@ -71,7 +71,7 @@
             {% if has_memes %}
               {% for meme in memes %}
               <article class="meme-card">
-                <a href="/memes">
+                <a href="{{ meme.detail_href }}">
                   <img class="meme-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
                 </a>
                 <h3>{{ meme.title }}</h3>

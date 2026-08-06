@@ -281,6 +281,45 @@ pub async fn list_popular_tags(
     .map_err(Into::into)
 }
 
+pub async fn get_approved(pool: &SqlitePool, meme_id: &str) -> Result<MemeWithTags, AppError> {
+    let row = sqlx::query_as::<_, MemeRow>(
+        "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.id = ? AND memes.status = ?",
+    )
+    .bind(meme_id)
+    .bind(STATUS_APPROVED)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let mut memes = attach_tags(pool, vec![row]).await?;
+    memes.pop().ok_or(AppError::NotFound)
+}
+
+pub async fn adjacent_approved(
+    pool: &SqlitePool,
+    current: &MemeRow,
+) -> Result<(Option<MemeRow>, Option<MemeRow>), AppError> {
+    // 详情页的上一个/下一个沿用公开展示墙排序：创建时间倒序，ID 倒序。
+    let previous = sqlx::query_as::<_, MemeRow>(
+        "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.status = ? AND (memes.created_at_epoch > ? OR (memes.created_at_epoch = ? AND memes.id > ?)) ORDER BY memes.created_at_epoch ASC, memes.id ASC LIMIT 1",
+    )
+    .bind(STATUS_APPROVED)
+    .bind(current.created_at_epoch)
+    .bind(current.created_at_epoch)
+    .bind(&current.id)
+    .fetch_optional(pool)
+    .await?;
+    let next = sqlx::query_as::<_, MemeRow>(
+        "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.status = ? AND (memes.created_at_epoch < ? OR (memes.created_at_epoch = ? AND memes.id < ?)) ORDER BY memes.created_at_epoch DESC, memes.id DESC LIMIT 1",
+    )
+    .bind(STATUS_APPROVED)
+    .bind(current.created_at_epoch)
+    .bind(current.created_at_epoch)
+    .bind(&current.id)
+    .fetch_optional(pool)
+    .await?;
+    Ok((previous, next))
+}
+
 pub async fn list_for_admin(
     pool: &SqlitePool,
     status: AdminMemeStatus,

@@ -654,6 +654,17 @@ small {
     margin: 14px 0 10px;
 }
 
+.meme-card h2 a,
+.meme-card h3 a {
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.meme-card h2 a:hover,
+.meme-card h3 a:hover {
+    color: var(--teal);
+}
+
 .meme-image {
     display: block;
     width: 100%;
@@ -661,6 +672,38 @@ small {
     object-fit: cover;
     background: var(--surface-raised);
     border-radius: 16px;
+}
+
+.meme-thumb-link {
+    display: block;
+}
+
+.meme-detail {
+    display: grid;
+    gap: 18px;
+}
+
+.meme-detail-image {
+    display: block;
+    max-width: 100%;
+    max-height: min(78vh, 900px);
+    margin: 0 auto;
+    object-fit: contain;
+    background: var(--surface-raised);
+    border-radius: 18px;
+}
+
+.meme-detail-meta {
+    display: grid;
+    gap: 14px;
+}
+
+.meme-detail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    justify-content: center;
 }
 
 .delete-meme-form {

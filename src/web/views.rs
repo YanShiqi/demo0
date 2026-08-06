@@ -81,11 +81,18 @@ pub struct MemeView {
     pub username: String,
     pub nickname: String,
     pub title: String,
+    pub detail_href: String,
     pub is_pending: bool,
     pub status_label: &'static str,
     pub created_at: String,
     pub tags: Vec<String>,
     pub has_tags: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct MemeAdjacentView {
+    pub title: String,
+    pub href: String,
 }
 
 #[derive(Clone, Debug)]
@@ -112,6 +119,19 @@ pub struct MemesTemplate {
     pub next_page: i64,
     pub has_next_page: bool,
     pub page_size: i64,
+}
+
+#[derive(Template)]
+#[template(path = "meme_detail.html")]
+pub struct MemeDetailTemplate {
+    pub ctx: PageContext,
+    pub meme: MemeView,
+    pub has_previous_meme: bool,
+    pub previous_meme: MemeAdjacentView,
+    pub has_next_meme: bool,
+    pub next_meme: MemeAdjacentView,
+    pub download_href: String,
+    pub return_href: String,
 }
 
 #[derive(Template)]

@@ -1847,6 +1847,111 @@ async fn meme_wall_uses_numbered_pagination_with_previous_and_next_links() {
 }
 
 #[tokio::test]
+async fn approved_memes_have_full_size_detail_navigation_and_download() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("meme-detail.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let author = auth::create_user(
+        &pool,
+        "detail_meme_author",
+        "详情作者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "detail_meme_admin",
+        "详情管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    let config = test_config(&temporary, database_url);
+    tokio::fs::create_dir_all(&config.memes.dir).await.unwrap();
+    tokio::fs::write(config.memes.dir.join("newestdetail.png"), tiny_png())
+        .await
+        .unwrap();
+    tokio::fs::write(config.memes.dir.join("middledetail.png"), tiny_png())
+        .await
+        .unwrap();
+    tokio::fs::write(config.memes.dir.join("oldestdetail.png"), tiny_png())
+        .await
+        .unwrap();
+    let newest = approved_meme(&pool, &author, &admin, "newestdetail.png", "最新详情图", 30).await;
+    let middle = approved_meme(&pool, &author, &admin, "middledetail.png", "中间详情图", 20).await;
+    let oldest = approved_meme(&pool, &author, &admin, "oldestdetail.png", "最早详情图", 10).await;
+    let router = app::build(pool, config);
+
+    let wall_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/memes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(wall_html.contains(&format!("href=\"/memes/{middle}\"")));
+
+    let detail_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/memes/{middle}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(detail_html.contains("中间详情图"));
+    assert!(detail_html.contains("class=\"meme-detail-image\""));
+    assert!(detail_html.contains(&format!("src=\"/memes/{middle}/image\"")));
+    assert!(detail_html.contains(&format!("href=\"/memes/{middle}/download\"")));
+    assert!(detail_html.contains("下载"));
+    assert!(detail_html.contains("返回"));
+    assert!(detail_html.contains("上一个：最新详情图"));
+    assert!(detail_html.contains(&format!("href=\"/memes/{newest}\"")));
+    assert!(detail_html.contains("下一个：最早详情图"));
+    assert!(detail_html.contains(&format!("href=\"/memes/{oldest}\"")));
+
+    let download_response = router
+        .oneshot(
+            Request::builder()
+                .uri(format!("/memes/{middle}/download"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(download_response.status(), StatusCode::OK);
+    assert_eq!(
+        download_response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .unwrap(),
+        "image/png"
+    );
+    assert_eq!(
+        download_response
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .unwrap(),
+        "attachment; filename=\"middledetail.png\""
+    );
+}
+
+#[tokio::test]
 async fn meme_wall_shows_popular_approved_tags_as_filter_links() {
     let temporary = TempDir::new().unwrap();
     let database_path = temporary.path().join("meme-popular-tags.db");

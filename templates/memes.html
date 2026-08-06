@@ -38,8 +38,10 @@
 <section class="meme-grid">
   {% for meme in memes %}
   <article class="meme-card">
-    <img class="meme-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
-    <h2>{{ meme.title }}</h2>
+    <a class="meme-thumb-link" href="{{ meme.detail_href }}" aria-label="查看 {{ meme.title }} 的完整图片">
+      <img class="meme-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
+    </a>
+    <h2><a href="{{ meme.detail_href }}">{{ meme.title }}</a></h2>
     <a class="message-author" href="/u/{{ meme.username }}">
       <img class="avatar" src="/users/{{ meme.author_user_id }}/avatar" alt="{{ meme.nickname }} 的头像">
       <span><strong>{{ meme.nickname }}</strong><small>@{{ meme.username }} · {{ meme.created_at }}</small></span>

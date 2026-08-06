@@ -29,10 +29,11 @@ use crate::{
 };
 use views::{
     AdminMemesTemplate, AdminNovelsTemplate, AdminUserView, AdminUsersTemplate, HomeTemplate,
-    LoginTemplate, MemeView, MemesTemplate, MessageView, MessagesTemplate, NewMemeTemplate,
-    NovelChapterCommentView, NovelChapterPreviewView, NovelChapterTemplate, NovelChapterView,
-    NovelDetailTemplate, NovelView, NovelsTemplate, PasswordChangeRequiredTemplate, PopularTagView,
-    ProfileTemplate, PublicProfileTemplate, RegisterTemplate,
+    LoginTemplate, MemeAdjacentView, MemeDetailTemplate, MemeView, MemesTemplate, MessageView,
+    MessagesTemplate, NewMemeTemplate, NovelChapterCommentView, NovelChapterPreviewView,
+    NovelChapterTemplate, NovelChapterView, NovelDetailTemplate, NovelView, NovelsTemplate,
+    PasswordChangeRequiredTemplate, PopularTagView, ProfileTemplate, PublicProfileTemplate,
+    RegisterTemplate,
 };
 
 #[derive(Deserialize)]
@@ -504,6 +505,33 @@ pub async fn memes_page(
     )
 }
 
+pub async fn meme_detail_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(meme_id): Path<String>,
+) -> Result<Response, AppError> {
+    let (session, _, ctx) = page_context(&state, &headers).await?;
+    let meme = memes::get_approved(&state.pool, &meme_id).await?;
+    let (previous_meme, next_meme) = memes::adjacent_approved(&state.pool, &meme.row).await?;
+    let (has_previous_meme, previous_meme) = meme_adjacent_view(previous_meme);
+    let (has_next_meme, next_meme) = meme_adjacent_view(next_meme);
+    let download_href = format!("/memes/{}/download", meme.row.id);
+    render(
+        MemeDetailTemplate {
+            ctx,
+            meme: meme_view(meme, state.config.display.utc_offset_hours),
+            has_previous_meme,
+            previous_meme,
+            has_next_meme,
+            next_meme,
+            download_href,
+            return_href: "/memes".to_owned(),
+        },
+        StatusCode::OK,
+        session.new_cookie,
+    )
+}
+
 pub async fn new_meme_page(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -638,6 +666,25 @@ pub async fn meme_image(
     let bytes = tokio::fs::read(state.config.memes.dir.join(storage_name)).await?;
     // 删除后的图片不应继续被浏览器缓存，避免个人页仍短暂显示旧内容。
     binary_response(bytes, &media_type, "no-store")
+}
+
+pub async fn meme_download(
+    State(state): State<AppState>,
+    Path(meme_id): Path<String>,
+) -> Result<Response, AppError> {
+    let meme = memes::get_approved(&state.pool, &meme_id).await?;
+    if !safe_storage_name(&meme.row.storage_name) {
+        return Err(AppError::NotFound);
+    }
+    let bytes = tokio::fs::read(state.config.memes.dir.join(&meme.row.storage_name)).await?;
+    let mut response = binary_response(bytes, &meme.row.media_type, "no-store")?;
+    let disposition = format!("attachment; filename=\"{}\"", meme.row.storage_name);
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_str(&disposition)
+            .map_err(|error| AppError::Internal(format!("Meme 下载文件名无效：{error}")))?,
+    );
+    Ok(response)
 }
 
 pub async fn admin_memes(
@@ -1581,6 +1628,7 @@ fn home_message_view(message: PublicMessageRow, utc_offset_hours: i8) -> Message
 fn meme_view(meme: MemeWithTags, utc_offset_hours: i8) -> MemeView {
     let status_label = meme_status_label(&meme.row);
     MemeView {
+        detail_href: format!("/memes/{}", meme.row.id),
         id: meme.row.id,
         author_user_id: meme.row.author_user_id,
         username: meme.row.username,
@@ -1592,6 +1640,25 @@ fn meme_view(meme: MemeWithTags, utc_offset_hours: i8) -> MemeView {
         has_tags: !meme.tags.is_empty(),
         tags: meme.tags,
     }
+}
+
+fn meme_adjacent_view(meme: Option<MemeRow>) -> (bool, MemeAdjacentView) {
+    if let Some(meme) = meme {
+        return (
+            true,
+            MemeAdjacentView {
+                title: meme.title,
+                href: format!("/memes/{}", meme.id),
+            },
+        );
+    }
+    (
+        false,
+        MemeAdjacentView {
+            title: String::new(),
+            href: String::new(),
+        },
+    )
 }
 
 fn novel_chapter_preview_view(

@@ -45,7 +45,9 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         )
         .route("/memes", get(web::memes_page).post(web::create_meme))
         .route("/memes/new", get(web::new_meme_page))
+        .route("/memes/{id}", get(web::meme_detail_page))
         .route("/memes/{id}/image", get(web::meme_image))
+        .route("/memes/{id}/download", get(web::meme_download))
         .route(
             "/memes/{id}/delete",
             axum::routing::post(web::delete_own_meme),

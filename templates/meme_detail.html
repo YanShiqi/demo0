@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ meme.title }} · Meme · 牢笼{% endblock %}
+{% block content %}
+<section class="section-heading">
+  <div>
+    <p class="eyebrow">MEME DETAIL</p>
+    <h1>{{ meme.title }}</h1>
+  </div>
+  <a href="{{ return_href }}">返回</a>
+</section>
+
+<article class="panel meme-detail">
+  <img class="meme-detail-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
+  <div class="meme-detail-meta">
+    <a class="message-author" href="/u/{{ meme.username }}">
+      <img class="avatar" src="/users/{{ meme.author_user_id }}/avatar" alt="{{ meme.nickname }} 的头像">
+      <span><strong>{{ meme.nickname }}</strong><small>@{{ meme.username }} · {{ meme.created_at }}</small></span>
+    </a>
+    {% if meme.has_tags %}
+    <div class="tag-list">
+      {% for tag in meme.tags %}
+        <a href="/memes?tag={{ tag }}">#{{ tag }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</article>
+
+<nav class="meme-detail-actions" aria-label="Meme 浏览操作">
+  {% if has_previous_meme %}
+    <a class="button secondary" href="{{ previous_meme.href }}">← 上一个：{{ previous_meme.title }}</a>
+  {% endif %}
+  {% if has_next_meme %}
+    <a class="button secondary" href="{{ next_meme.href }}">下一个：{{ next_meme.title }} →</a>
+  {% endif %}
+  <a class="button" href="{{ download_href }}">下载</a>
+  <a class="button secondary" href="{{ return_href }}">返回</a>
+</nav>
+{% endblock %}
