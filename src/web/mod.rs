@@ -163,6 +163,7 @@ pub struct RoleForm {
 #[derive(Deserialize, Default)]
 pub struct ProfileQuery {
     updated: Option<String>,
+    meme_page: Option<i64>,
 }
 
 pub async fn home(
@@ -1033,6 +1034,7 @@ pub async fn profile_page(
         &state,
         &session,
         &user,
+        query.meme_page.unwrap_or(1),
         None,
         (!success.is_empty()).then_some(success),
     )
@@ -1050,7 +1052,7 @@ pub async fn update_nickname(
     let (nickname, nickname_key) = match auth::validate_nickname(&form.nickname) {
         Ok(value) => value,
         Err(AppError::BadRequest(message)) => {
-            return render_profile(&state, &session, &user, Some(&message), None).await;
+            return render_profile(&state, &session, &user, 1, Some(&message), None).await;
         }
         Err(error) => return Err(error),
     };
@@ -1064,7 +1066,7 @@ pub async fn update_nickname(
     .await?
         > 0;
     if duplicate {
-        return render_profile(&state, &session, &user, Some("昵称已被使用"), None).await;
+        return render_profile(&state, &session, &user, 1, Some("昵称已被使用"), None).await;
     }
 
     let result =
@@ -1077,7 +1079,7 @@ pub async fn update_nickname(
             .await;
     if let Err(error) = result {
         if is_unique_violation(&error) {
-            return render_profile(&state, &session, &user, Some("昵称已被使用"), None).await;
+            return render_profile(&state, &session, &user, 1, Some("昵称已被使用"), None).await;
         }
         return Err(error.into());
     }
@@ -1095,7 +1097,7 @@ pub async fn update_bio(
     let bio = match auth::validate_bio(&form.bio) {
         Ok(value) => value,
         Err(AppError::BadRequest(message)) => {
-            return render_profile(&state, &session, &user, Some(&message), None).await;
+            return render_profile(&state, &session, &user, 1, Some(&message), None).await;
         }
         Err(error) => return Err(error),
     };
@@ -1494,6 +1496,7 @@ async fn render_profile(
     state: &AppState,
     session: &SessionRow,
     user: &User,
+    meme_page: i64,
     error: Option<&str>,
     success: Option<&str>,
 ) -> Result<Response, AppError> {
@@ -1504,8 +1507,15 @@ async fn render_profile(
             .map(|message| message_view(message, Some(user), state.config.display.utc_offset_hours))
             .collect();
     let has_messages = !messages.is_empty();
-    let memes: Vec<MemeView> = memes::list_by_author(&state.pool, &user.id)
-        .await?
+    let meme_page_data = memes::list_by_author(
+        &state.pool,
+        &user.id,
+        meme_page,
+        state.config.memes.profile_page_size,
+    )
+    .await?;
+    let memes: Vec<MemeView> = meme_page_data
+        .items
         .into_iter()
         .map(|meme| meme_view(meme, state.config.display.utc_offset_hours))
         .collect();
@@ -1527,6 +1537,12 @@ async fn render_profile(
             retention_days: state.config.messages.retention_days,
             memes,
             has_memes,
+            meme_current_page: meme_page_data.current_page,
+            meme_total_pages: meme_page_data.total_pages,
+            meme_previous_page: meme_page_data.previous_page.unwrap_or_default(),
+            has_meme_previous_page: meme_page_data.previous_page.is_some(),
+            meme_next_page: meme_page_data.next_page.unwrap_or_default(),
+            has_meme_next_page: meme_page_data.next_page.is_some(),
         },
         if error.is_some() {
             StatusCode::BAD_REQUEST

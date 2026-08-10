@@ -264,6 +264,12 @@ pub struct ProfileTemplate {
     pub retention_days: i64,
     pub memes: Vec<MemeView>,
     pub has_memes: bool,
+    pub meme_current_page: i64,
+    pub meme_total_pages: i64,
+    pub meme_previous_page: i64,
+    pub has_meme_previous_page: bool,
+    pub meme_next_page: i64,
+    pub has_meme_next_page: bool,
 }
 
 #[derive(Template)]

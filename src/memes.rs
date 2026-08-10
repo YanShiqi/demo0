@@ -263,17 +263,7 @@ pub async fn list_approved(
                 .await?
         }
     };
-    // 空结果也保留第 1 页，便于分页控件保持稳定的结构。
-    let total_pages = if total_items == 0 {
-        1
-    } else {
-        (total_items - 1) / config.page_size + 1
-    };
-    // 用户输入可能超过最后一页，这里归一化后再计算偏移量，避免展示空白页。
-    let current_page = page.min(total_pages);
-    let offset = (current_page - 1)
-        .checked_mul(config.page_size)
-        .ok_or_else(|| AppError::BadRequest("页码过大".to_owned()))?;
+    let bounds = page_bounds(total_items, page, config.page_size)?;
 
     let rows = match tag_key.as_deref() {
         Some(tag_key) => sqlx::query_as::<_, MemeRow>(
@@ -282,7 +272,7 @@ pub async fn list_approved(
         .bind(STATUS_APPROVED)
         .bind(tag_key)
         .bind(config.page_size)
-        .bind(offset)
+        .bind(bounds.offset)
         .fetch_all(pool)
         .await?,
         None => sqlx::query_as::<_, MemeRow>(
@@ -290,11 +280,11 @@ pub async fn list_approved(
         )
         .bind(STATUS_APPROVED)
         .bind(config.page_size)
-        .bind(offset)
+        .bind(bounds.offset)
         .fetch_all(pool)
         .await?,
     };
-    page_from_rows(pool, rows, current_page, total_pages).await
+    page_from_rows(pool, rows, bounds.current_page, bounds.total_pages).await
 }
 
 pub async fn list_popular_tags(
@@ -385,15 +375,27 @@ pub async fn list_for_admin(
 pub async fn list_by_author(
     pool: &SqlitePool,
     author_user_id: &str,
-) -> Result<Vec<MemeWithTags>, AppError> {
-    let rows = sqlx::query_as::<_, MemeRow>(
-        "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.author_user_id = ? AND memes.status <> ? ORDER BY memes.created_at_epoch DESC, memes.id DESC",
+    page: i64,
+    page_size: i64,
+) -> Result<MemePage, AppError> {
+    let total_items = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM memes WHERE author_user_id = ? AND status <> ?",
     )
     .bind(author_user_id)
     .bind(STATUS_DELETED)
+    .fetch_one(pool)
+    .await?;
+    let bounds = page_bounds(total_items, page, page_size)?;
+    let rows = sqlx::query_as::<_, MemeRow>(
+        "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.author_user_id = ? AND memes.status <> ? ORDER BY memes.created_at_epoch DESC, memes.id DESC LIMIT ? OFFSET ?",
+    )
+    .bind(author_user_id)
+    .bind(STATUS_DELETED)
+    .bind(page_size)
+    .bind(bounds.offset)
     .fetch_all(pool)
     .await?;
-    attach_tags(pool, rows).await
+    page_from_rows(pool, rows, bounds.current_page, bounds.total_pages).await
 }
 
 pub async fn approve(
@@ -607,6 +609,38 @@ async fn find_or_create_tag(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PageBounds {
+    current_page: i64,
+    total_pages: i64,
+    offset: i64,
+}
+
+fn page_bounds(total_items: i64, page: i64, page_size: i64) -> Result<PageBounds, AppError> {
+    if page < 1 {
+        return Err(AppError::BadRequest("页码必须大于 0".to_owned()));
+    }
+    if page_size < 1 {
+        return Err(AppError::Internal("分页大小必须大于 0".to_owned()));
+    }
+    // 空结果也保留第 1 页，便于分页控件保持稳定的结构。
+    let total_pages = if total_items == 0 {
+        1
+    } else {
+        (total_items - 1) / page_size + 1
+    };
+    // 用户输入可能超过最后一页，这里归一化后再计算偏移量，避免展示空白页。
+    let current_page = page.min(total_pages);
+    let offset = (current_page - 1)
+        .checked_mul(page_size)
+        .ok_or_else(|| AppError::BadRequest("页码过大".to_owned()))?;
+    Ok(PageBounds {
+        current_page,
+        total_pages,
+        offset,
+    })
+}
+
 async fn page_from_rows(
     pool: &SqlitePool,
     rows: Vec<MemeRow>,
@@ -722,6 +756,7 @@ mod tests {
             max_gif_frames: 120,
             max_decoded_pixels: 50_000_000,
             page_size: 20,
+            profile_page_size: 12,
             home_preview_limit: 6,
             popular_tag_limit: 10,
             max_tags_per_meme: 5,

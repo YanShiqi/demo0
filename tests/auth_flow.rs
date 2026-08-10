@@ -1961,6 +1961,101 @@ async fn meme_wall_uses_numbered_pagination_with_previous_and_next_links() {
 }
 
 #[tokio::test]
+async fn profile_memes_use_numbered_pagination() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("profile-meme-pages.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let author = auth::create_user(
+        &pool,
+        "profile_page_author",
+        "个人页作者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "profile_page_admin",
+        "个人页管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    approved_meme(
+        &pool,
+        &author,
+        &admin,
+        "profile-newest.png",
+        "个人页最新",
+        30,
+    )
+    .await;
+    approved_meme(
+        &pool,
+        &author,
+        &admin,
+        "profile-middle.png",
+        "个人页中间",
+        20,
+    )
+    .await;
+    approved_meme(
+        &pool,
+        &author,
+        &admin,
+        "profile-oldest.png",
+        "个人页最早",
+        10,
+    )
+    .await;
+
+    let mut config = test_config(&temporary, database_url);
+    config.memes.profile_page_size = 2;
+    let router = app::build(pool, config);
+    let author_cookie = sign_in(&router, "profile_page_author", "127.0.0.1:43120").await;
+
+    let first_page = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/profile")
+                .header(header::COOKIE, &author_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first_page.status(), StatusCode::OK);
+    let first_html = response_html(first_page).await;
+    assert!(first_html.contains("个人页最新"));
+    assert!(first_html.contains("个人页中间"));
+    assert!(!first_html.contains("个人页最早"));
+    assert!(first_html.contains("第 1 / 2 页"));
+    assert!(first_html.contains("href=\"/profile?meme_page=2\""));
+    assert!(first_html.contains("name=\"meme_page\""));
+
+    let second_page = router
+        .oneshot(
+            Request::builder()
+                .uri("/profile?meme_page=2")
+                .header(header::COOKIE, author_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_page.status(), StatusCode::OK);
+    let second_html = response_html(second_page).await;
+    assert!(!second_html.contains("个人页最新"));
+    assert!(second_html.contains("个人页最早"));
+    assert!(second_html.contains("第 2 / 2 页"));
+    assert!(second_html.contains("href=\"/profile?meme_page=1\""));
+}
+
+#[tokio::test]
 async fn approved_memes_have_full_size_detail_navigation_and_download() {
     let temporary = TempDir::new().unwrap();
     let database_path = temporary.path().join("meme-detail.db");
@@ -2174,6 +2269,7 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             max_gif_frames: 120,
             max_decoded_pixels: 50_000_000,
             page_size: 20,
+            profile_page_size: 12,
             home_preview_limit: 6,
             popular_tag_limit: 10,
             max_tags_per_meme: 5,

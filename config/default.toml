@@ -47,6 +47,8 @@ max_gif_frames = 120
 max_decoded_pixels = 50000000
 # Meme 展示墙每页最多返回数量；前端通过页码前后翻页。
 page_size = 20
+# 个人资料页的 Meme 管理列表每页最多展示数量；避免一次性加载全部图片。
+profile_page_size = 12
 # 首页 Meme 预览最多展示数量。
 home_preview_limit = 8
 # Meme 展示墙最多展示的热门标签数量。
