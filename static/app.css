@@ -815,6 +815,30 @@ small {
     font-weight: 800;
 }
 
+.pagination-disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+.pagination-jump {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    justify-content: center;
+    margin-top: 14px;
+    color: var(--muted);
+}
+
+.pagination-jump input {
+    width: 76px;
+    padding: 9px 10px;
+    color: var(--ink);
+    text-align: center;
+    background: var(--panel);
+    border: 1px solid rgba(98, 199, 182, 0.28);
+    border-radius: 10px;
+}
+
 .message-list.compact-list {
     margin-top: 18px;
 }

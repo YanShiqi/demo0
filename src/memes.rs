@@ -84,6 +84,7 @@ pub struct MemeWithTags {
 pub struct MemePage {
     pub items: Vec<MemeWithTags>,
     pub current_page: i64,
+    pub total_pages: i64,
     pub previous_page: Option<i64>,
     pub next_page: Option<i64>,
 }
@@ -243,14 +244,36 @@ pub async fn list_approved(
     if page < 1 {
         return Err(AppError::BadRequest("页码必须大于 0".to_owned()));
     }
-    let query_limit = config.page_size + 1;
-    let offset = (page - 1)
-        .checked_mul(config.page_size)
-        .ok_or_else(|| AppError::BadRequest("页码过大".to_owned()))?;
     let tag_key = tag
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(tag_key);
+    let total_items = match tag_key.as_deref() {
+        Some(tag_key) => sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM memes JOIN meme_tag_links ON meme_tag_links.meme_id = memes.id JOIN meme_tags ON meme_tags.id = meme_tag_links.tag_id WHERE memes.status = ? AND meme_tags.name_key = ?",
+        )
+        .bind(STATUS_APPROVED)
+        .bind(tag_key)
+        .fetch_one(pool)
+        .await?,
+        None => {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM memes WHERE status = ?")
+                .bind(STATUS_APPROVED)
+                .fetch_one(pool)
+                .await?
+        }
+    };
+    // 空结果也保留第 1 页，便于分页控件保持稳定的结构。
+    let total_pages = if total_items == 0 {
+        1
+    } else {
+        (total_items - 1) / config.page_size + 1
+    };
+    // 用户输入可能超过最后一页，这里归一化后再计算偏移量，避免展示空白页。
+    let current_page = page.min(total_pages);
+    let offset = (current_page - 1)
+        .checked_mul(config.page_size)
+        .ok_or_else(|| AppError::BadRequest("页码过大".to_owned()))?;
 
     let rows = match tag_key.as_deref() {
         Some(tag_key) => sqlx::query_as::<_, MemeRow>(
@@ -258,7 +281,7 @@ pub async fn list_approved(
         )
         .bind(STATUS_APPROVED)
         .bind(tag_key)
-        .bind(query_limit)
+        .bind(config.page_size)
         .bind(offset)
         .fetch_all(pool)
         .await?,
@@ -266,12 +289,12 @@ pub async fn list_approved(
             "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.status = ? ORDER BY memes.created_at_epoch DESC, memes.id DESC LIMIT ? OFFSET ?",
         )
         .bind(STATUS_APPROVED)
-        .bind(query_limit)
+        .bind(config.page_size)
         .bind(offset)
         .fetch_all(pool)
         .await?,
     };
-    page_from_rows(pool, rows, config.page_size as usize, page).await
+    page_from_rows(pool, rows, current_page, total_pages).await
 }
 
 pub async fn list_popular_tags(
@@ -586,18 +609,17 @@ async fn find_or_create_tag(
 
 async fn page_from_rows(
     pool: &SqlitePool,
-    mut rows: Vec<MemeRow>,
-    page_size: usize,
+    rows: Vec<MemeRow>,
     current_page: i64,
+    total_pages: i64,
 ) -> Result<MemePage, AppError> {
-    let next_page = if rows.len() > page_size {
-        rows.pop().expect("多取一条时应存在下一页判断来源");
-        Some(current_page + 1)
+    let previous_page = if current_page > 1 {
+        Some(current_page - 1)
     } else {
         None
     };
-    let previous_page = if current_page > 1 {
-        Some(current_page - 1)
+    let next_page = if current_page < total_pages {
+        Some(current_page + 1)
     } else {
         None
     };
@@ -605,6 +627,7 @@ async fn page_from_rows(
     Ok(MemePage {
         items,
         current_page,
+        total_pages,
         previous_page,
         next_page,
     })

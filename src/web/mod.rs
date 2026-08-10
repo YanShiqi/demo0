@@ -494,6 +494,7 @@ pub async fn memes_page(
             has_tag: !tag.trim().is_empty(),
             tag,
             current_page: page.current_page,
+            total_pages: page.total_pages,
             has_previous_page: page.previous_page.is_some(),
             previous_page: page.previous_page.unwrap_or_default(),
             has_next_page: page.next_page.is_some(),

@@ -66,25 +66,40 @@
 </section>
 {% endif %}
 
-{% if has_previous_page || has_next_page %}
 <nav class="pagination" aria-label="Meme 分页">
   {% if has_previous_page %}
   {% if has_tag %}
+    <a class="button secondary" href="/memes?tag={{ tag }}&amp;page=1">第一页</a>
     <a class="button secondary" href="/memes?tag={{ tag }}&amp;page={{ previous_page }}">上一页</a>
   {% else %}
+    <a class="button secondary" href="/memes?page=1">第一页</a>
     <a class="button secondary" href="/memes?page={{ previous_page }}">上一页</a>
   {% endif %}
+  {% else %}
+    <span class="button secondary pagination-disabled" aria-disabled="true">第一页</span>
+    <span class="button secondary pagination-disabled" aria-disabled="true">上一页</span>
   {% endif %}
-  <span class="page-indicator">第 {{ current_page }} 页</span>
+
+  <span class="page-indicator">第 {{ current_page }} / {{ total_pages }} 页</span>
+
   {% if has_next_page %}
   {% if has_tag %}
     <a class="button secondary" href="/memes?tag={{ tag }}&amp;page={{ next_page }}">下一页</a>
+    <a class="button secondary" href="/memes?tag={{ tag }}&amp;page={{ total_pages }}">最后一页</a>
   {% else %}
     <a class="button secondary" href="/memes?page={{ next_page }}">下一页</a>
+    <a class="button secondary" href="/memes?page={{ total_pages }}">最后一页</a>
   {% endif %}
+  {% else %}
+    <span class="button secondary pagination-disabled" aria-disabled="true">下一页</span>
+    <span class="button secondary pagination-disabled" aria-disabled="true">最后一页</span>
   {% endif %}
 </nav>
-{% else %}
-<p class="pagination solo"><span class="page-indicator">第 {{ current_page }} 页</span></p>
-{% endif %}
+
+<form class="pagination-jump" action="/memes" method="get" aria-label="跳转到指定页">
+  {% if has_tag %}<input type="hidden" name="tag" value="{{ tag }}">{% endif %}
+  <label for="page">跳转到</label>
+  <input id="page" name="page" type="number" min="1" max="{{ total_pages }}" value="{{ current_page }}" inputmode="numeric" required>
+  <button class="button secondary" type="submit">跳转</button>
+</form>
 {% endblock %}

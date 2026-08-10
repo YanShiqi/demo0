@@ -1899,7 +1899,13 @@ async fn meme_wall_uses_numbered_pagination_with_previous_and_next_links() {
     assert!(first_html.contains("最新 Meme"));
     assert!(first_html.contains("中间 Meme"));
     assert!(!first_html.contains("最早 Meme"));
-    assert!(first_html.contains("第 1 页"));
+    assert!(first_html.contains("第 1 / 2 页"));
+    assert!(first_html.contains("第一页"));
+    assert!(first_html.contains("最后一页"));
+    assert!(first_html.contains("href=\"/memes?page=2\">最后一页</a>"));
+    assert!(first_html.contains("aria-label=\"跳转到指定页\""));
+    assert!(first_html.contains("name=\"page\""));
+    assert!(first_html.contains("max=\"2\""));
     assert!(first_html.contains("href=\"/memes?page=2\""));
     assert!(!first_html.contains("加载更多"));
 
@@ -1918,8 +1924,26 @@ async fn meme_wall_uses_numbered_pagination_with_previous_and_next_links() {
     assert!(!second_html.contains("最新 Meme"));
     assert!(!second_html.contains("中间 Meme"));
     assert!(second_html.contains("最早 Meme"));
-    assert!(second_html.contains("第 2 页"));
+    assert!(second_html.contains("第 2 / 2 页"));
+    assert!(second_html.contains("href=\"/memes?page=1\">第一页</a>"));
+    assert!(second_html.contains("href=\"/memes?page=1\">上一页</a>"));
+    assert!(second_html.contains("最后一页"));
     assert!(second_html.contains("href=\"/memes?page=1\""));
+
+    let oversized_page = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/memes?page=99")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(oversized_page.status(), StatusCode::OK);
+    let oversized_html = response_html(oversized_page).await;
+    assert!(oversized_html.contains("最早 Meme"));
+    assert!(oversized_html.contains("第 2 / 2 页"));
 
     let tagged_second_page = router
         .oneshot(

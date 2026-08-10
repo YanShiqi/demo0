@@ -114,6 +114,7 @@ pub struct MemesTemplate {
     pub tag: String,
     pub has_tag: bool,
     pub current_page: i64,
+    pub total_pages: i64,
     pub previous_page: i64,
     pub has_previous_page: bool,
     pub next_page: i64,
