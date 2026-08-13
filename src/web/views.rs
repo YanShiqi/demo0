@@ -18,6 +18,9 @@ pub struct HomeTemplate {
     pub novel_chapter_previews: Vec<NovelChapterPreviewView>,
     pub has_novel_chapter_previews: bool,
     pub novel_preview_limit: i64,
+    pub updates: Vec<UpdateView>,
+    pub has_updates: bool,
+    pub update_preview_limit: i64,
 }
 
 #[derive(Template)]
@@ -93,6 +96,23 @@ pub struct MemeView {
 pub struct MemeAdjacentView {
     pub title: String,
     pub href: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct UpdateView {
+    pub date: String,
+    pub version: String,
+    pub title: String,
+    pub summary: String,
+    pub changes: Vec<String>,
+}
+
+#[derive(Template)]
+#[template(path = "updates.html")]
+pub struct UpdatesTemplate {
+    pub ctx: PageContext,
+    pub updates: Vec<UpdateView>,
+    pub has_updates: bool,
 }
 
 #[derive(Clone, Debug)]

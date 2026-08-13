@@ -7,12 +7,13 @@ use axum::{
 };
 use demo0::{
     app, auth,
-    config::{Config, DisplayConfig, MemeConfig, MessageConfig, NovelConfig},
+    config::{Config, DisplayConfig, MemeConfig, MessageConfig, NovelConfig, UpdateConfig},
     db,
     error::AppError,
     memes::{self, NewMeme},
     model::{Role, User},
     novels, public_messages,
+    updates::UpdateEntry,
 };
 use http_body_util::BodyExt;
 use tempfile::TempDir;
@@ -586,6 +587,60 @@ async fn home_uses_server_tabs_for_messages_and_memes() {
     assert!(fallback_html.contains("aria-current=\"page\">留言板"));
     assert!(fallback_html.contains("首页留言内容"));
     assert!(!fallback_html.contains("首页 Meme 标题"));
+}
+
+#[tokio::test]
+async fn anonymous_home_shows_update_preview_and_updates_page_shows_all() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("updates-page.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let mut config = test_config(&temporary, database_url);
+    config.updates.home_preview_limit = 2;
+    config.updates.entries = vec![
+        update_entry("2026-08-13", "0.3.0", "最新更新"),
+        update_entry("2026-08-12", "0.2.0", "上一条更新"),
+        update_entry("2026-08-11", "0.1.0", "更早更新"),
+    ];
+    let router = app::build(pool, config);
+
+    let home_response = router
+        .clone()
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(home_response.status(), StatusCode::OK);
+    let home_html = response_html(home_response).await;
+    assert!(home_html.contains("服务器更新记录"));
+    assert!(home_html.contains("最新更新"));
+    assert!(home_html.contains("上一条更新"));
+    assert!(!home_html.contains("更早更新"));
+    assert!(home_html.contains("href=\"/updates\""));
+
+    let updates_response = router
+        .oneshot(
+            Request::builder()
+                .uri("/updates")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(updates_response.status(), StatusCode::OK);
+    let updates_html = response_html(updates_response).await;
+    assert!(updates_html.contains("最新更新"));
+    assert!(updates_html.contains("上一条更新"));
+    assert!(updates_html.contains("更早更新"));
+}
+
+fn update_entry(date: &str, version: &str, title: &str) -> UpdateEntry {
+    UpdateEntry {
+        date: date.to_owned(),
+        version: version.to_owned(),
+        title: title.to_owned(),
+        summary: format!("{title}摘要"),
+        changes: vec![format!("{title}变更")],
+    }
 }
 
 #[tokio::test]
@@ -1444,6 +1499,68 @@ async fn admin_navigation_highlights_pending_memes() {
 }
 
 #[tokio::test]
+async fn management_navigation_groups_admin_links_by_role() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("management-nav.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "grouped_admin",
+        "普通管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    let super_admin = auth::create_user(
+        &pool,
+        "grouped_super_admin",
+        "超级管理员",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool, test_config(&temporary, database_url));
+
+    let admin_cookie = sign_in(&router, &admin.username, "127.0.0.1:43138").await;
+    let admin_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/profile")
+                .header(header::COOKIE, admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let admin_html = response_html(admin_response).await;
+    assert!(admin_html.contains("class=\"admin-menu\""));
+    assert!(admin_html.contains("href=\"/admin/memes\""));
+    assert!(!admin_html.contains("href=\"/admin/users\""));
+    assert!(!admin_html.contains("href=\"/admin/novels\""));
+
+    let super_cookie = sign_in(&router, &super_admin.username, "127.0.0.1:43139").await;
+    let super_response = router
+        .oneshot(
+            Request::builder()
+                .uri("/profile")
+                .header(header::COOKIE, super_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let super_html = response_html(super_response).await;
+    assert!(super_html.contains("class=\"admin-menu\""));
+    assert!(super_html.contains("href=\"/admin/memes\""));
+    assert!(super_html.contains("href=\"/admin/users\""));
+    assert!(super_html.contains("href=\"/admin/novels\""));
+}
+
+#[tokio::test]
 async fn memes_require_review_before_public_listing() {
     let temporary = TempDir::new().unwrap();
     let database_path = temporary.path().join("memes.db");
@@ -2283,6 +2400,11 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             max_chapter_title_length: 80,
             chapter_comment_max_length: 300,
             chapter_comment_page_size: 50,
+        },
+        updates: UpdateConfig {
+            file: temporary.path().join("updates.toml"),
+            home_preview_limit: 3,
+            entries: Vec::new(),
         },
     }
 }

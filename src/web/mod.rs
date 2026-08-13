@@ -26,6 +26,7 @@ use crate::{
     },
     public_messages::{self, PublicMessageRow},
     time_display,
+    updates::UpdateEntry,
 };
 use views::{
     AdminMemesTemplate, AdminNovelsTemplate, AdminUserView, AdminUsersTemplate, HomeTemplate,
@@ -33,7 +34,7 @@ use views::{
     MessagesTemplate, NewMemeTemplate, NovelChapterCommentView, NovelChapterPreviewView,
     NovelChapterTemplate, NovelChapterView, NovelDetailTemplate, NovelView, NovelsTemplate,
     PasswordChangeRequiredTemplate, PopularTagView, ProfileTemplate, PublicProfileTemplate,
-    RegisterTemplate,
+    RegisterTemplate, UpdateView, UpdatesTemplate,
 };
 
 #[derive(Deserialize)]
@@ -200,6 +201,15 @@ pub async fn home(
             })
             .collect();
     let has_novel_chapter_previews = !novel_chapter_previews.is_empty();
+    let updates: Vec<UpdateView> = state
+        .config
+        .updates
+        .entries
+        .iter()
+        .take(state.config.updates.home_preview_limit as usize)
+        .map(update_view)
+        .collect();
+    let has_updates = !updates.is_empty();
     render(
         HomeTemplate {
             ctx,
@@ -215,6 +225,33 @@ pub async fn home(
             novel_chapter_previews,
             has_novel_chapter_previews,
             novel_preview_limit: state.config.novels.home_preview_limit,
+            updates,
+            has_updates,
+            update_preview_limit: state.config.updates.home_preview_limit,
+        },
+        StatusCode::OK,
+        session.new_cookie,
+    )
+}
+
+pub async fn updates_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let (session, _, ctx) = page_context(&state, &headers).await?;
+    let updates: Vec<UpdateView> = state
+        .config
+        .updates
+        .entries
+        .iter()
+        .map(update_view)
+        .collect();
+    let has_updates = !updates.is_empty();
+    render(
+        UpdatesTemplate {
+            ctx,
+            updates,
+            has_updates,
         },
         StatusCode::OK,
         session.new_cookie,
@@ -1765,6 +1802,16 @@ fn popular_tag_view(tag: memes::PopularTag, selected_tag: &str) -> PopularTagVie
         usage_count: tag.usage_count,
         href,
         is_active,
+    }
+}
+
+fn update_view(update: &UpdateEntry) -> UpdateView {
+    UpdateView {
+        date: update.date.clone(),
+        version: update.version.clone(),
+        title: update.title.clone(),
+        summary: update.summary.clone(),
+        changes: update.changes.clone(),
     }
 }
 

@@ -3,6 +3,8 @@ use std::{env, net::SocketAddr, path::PathBuf};
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
+use crate::updates::{self, UpdateEntry};
+
 const DEFAULT_CONFIG_PATH: &str = "config/default.toml";
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 6324;
@@ -34,6 +36,8 @@ const DEFAULT_NOVEL_MAX_TITLE_LENGTH: usize = 60;
 const DEFAULT_NOVEL_MAX_CHAPTER_TITLE_LENGTH: usize = 80;
 const DEFAULT_NOVEL_CHAPTER_COMMENT_MAX_LENGTH: usize = 300;
 const DEFAULT_NOVEL_CHAPTER_COMMENT_PAGE_SIZE: i64 = 50;
+const DEFAULT_UPDATES_FILE: &str = "content/updates.toml";
+const DEFAULT_UPDATES_HOME_PREVIEW_LIMIT: i64 = 3;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -46,6 +50,7 @@ pub struct Config {
     pub messages: MessageConfig,
     pub memes: MemeConfig,
     pub novels: NovelConfig,
+    pub updates: UpdateConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -89,6 +94,13 @@ pub struct NovelConfig {
     pub chapter_comment_page_size: i64,
 }
 
+#[derive(Clone, Debug)]
+pub struct UpdateConfig {
+    pub file: PathBuf,
+    pub home_preview_limit: i64,
+    pub entries: Vec<UpdateEntry>,
+}
+
 impl Config {
     pub fn from_env() -> Result<Self> {
         let file_config = FileConfig::load(DEFAULT_CONFIG_PATH)?;
@@ -129,6 +141,7 @@ impl Config {
         let messages = MessageConfig::from_sources(file_config.messages)?;
         let memes = MemeConfig::from_sources(file_config.memes)?;
         let novels = NovelConfig::from_sources(file_config.novels)?;
+        let updates = UpdateConfig::from_sources(file_config.updates)?;
 
         Ok(Self {
             host,
@@ -140,6 +153,7 @@ impl Config {
             messages,
             memes,
             novels,
+            updates,
         })
     }
 
@@ -147,6 +161,30 @@ impl Config {
         format!("{}:{}", self.host, self.port)
             .parse()
             .context("APP_HOST 或 APP_PORT 无效")
+    }
+}
+
+impl UpdateConfig {
+    fn from_sources(file_config: Option<UpdatesFileConfig>) -> Result<Self> {
+        let file_config = file_config.unwrap_or_default();
+        let file = env::var("UPDATES_FILE")
+            .ok()
+            .or(file_config.file)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_UPDATES_FILE));
+        let home_preview_limit = parse_optional_env("UPDATES_HOME_PREVIEW_LIMIT")?
+            .or(file_config.home_preview_limit)
+            .unwrap_or(DEFAULT_UPDATES_HOME_PREVIEW_LIMIT);
+        anyhow::ensure!(
+            home_preview_limit > 0,
+            "UPDATES_HOME_PREVIEW_LIMIT 必须大于 0"
+        );
+        let entries = updates::load_file(&file)?;
+        Ok(Self {
+            file,
+            home_preview_limit,
+            entries,
+        })
     }
 }
 
@@ -344,6 +382,7 @@ struct FileConfig {
     messages: Option<MessageFileConfig>,
     memes: Option<MemeFileConfig>,
     novels: Option<NovelFileConfig>,
+    updates: Option<UpdatesFileConfig>,
 }
 
 impl FileConfig {
@@ -418,6 +457,12 @@ struct NovelFileConfig {
     max_chapter_title_length: Option<usize>,
     chapter_comment_max_length: Option<usize>,
     chapter_comment_page_size: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct UpdatesFileConfig {
+    file: Option<String>,
+    home_preview_limit: Option<i64>,
 }
 
 fn parse_optional_env<T>(name: &str) -> Result<Option<T>>

@@ -73,3 +73,9 @@ max_chapter_title_length = 80
 chapter_comment_max_length = 300
 # 单个章节页面默认展示的评论数量。
 chapter_comment_page_size = 50
+
+[updates]
+# 服务器更新记录文件路径；发布新版本时编辑这个文件并重新启动服务。
+file = "content/updates.toml"
+# 首页独立更新记录区域最多展示的最近条目数。
+home_preview_limit = 3

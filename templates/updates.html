@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}服务器更新记录 · 牢笼{% endblock %}
+{% block content %}
+<section class="panel updates-page">
+  <div class="preview-heading">
+    <div>
+      <p class="eyebrow">SERVER UPDATES</p>
+      <h1>服务器更新记录</h1>
+      <p class="muted">这里记录网站功能和体验上的变化。</p>
+    </div>
+    <a class="button secondary" href="/">返回首页</a>
+  </div>
+  {% if has_updates %}
+    <div class="updates-list">
+      {% for update in updates %}
+      <article class="update-card">
+        <div class="update-meta"><time>{{ update.date }}</time><span>{{ update.version }}</span></div>
+        <h2>{{ update.title }}</h2>
+        <p class="muted">{{ update.summary }}</p>
+        <ul>
+          {% for change in update.changes %}<li>{{ change }}</li>{% endfor %}
+        </ul>
+      </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="empty-state">暂时还没有更新记录。</p>
+  {% endif %}
+</section>
+{% endblock %}

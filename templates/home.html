@@ -111,7 +111,29 @@
   {% else %}
     <div class="actions"><a class="button" href="/register">创建账号</a><a class="button secondary" href="/login">已有账号</a></div>
   {% endif %}
-  <p>优化有关的建议请写在留言板。</p>
+</section>
+<section class="panel updates-section" aria-labelledby="server-updates-title">
+  <div class="preview-heading">
+    <div>
+      <p class="eyebrow">SERVER UPDATES</p>
+      <h2 id="server-updates-title">服务器更新记录</h2>
+      <p class="muted">最多展示最近 {{ update_preview_limit }} 条更新。</p>
+    </div>
+    <a href="/updates">查看全部</a>
+  </div>
+  {% if has_updates %}
+    <div class="updates-list compact-updates">
+      {% for update in updates %}
+      <article class="update-card">
+        <div class="update-meta"><time>{{ update.date }}</time><span>{{ update.version }}</span></div>
+        <h3>{{ update.title }}</h3>
+        <p class="muted">{{ update.summary }}</p>
+      </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="empty-state">暂时还没有更新记录。</p>
+  {% endif %}
 </section>
 <section class="feature-grid">
   <article><span>01</span><h2>简单</h2><p>服务端渲染，不引入不必要的前端复杂度。</p></article>

@@ -72,7 +72,25 @@ body {
     color: var(--teal);
 }
 
-.site-header nav a.admin-nav-alert {
+.admin-menu {
+    position: relative;
+}
+
+.site-header nav a.admin-menu-trigger {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 999px;
+}
+
+.site-header nav a.admin-menu-trigger:hover,
+.site-header nav a.admin-menu-trigger:focus-visible {
+    color: var(--teal);
+    background: rgba(98, 199, 182, 0.1);
+}
+
+.site-header nav a.admin-menu-alert {
     display: inline-flex;
     gap: 8px;
     align-items: center;
@@ -84,9 +102,54 @@ body {
     box-shadow: 0 0 22px rgba(255, 152, 127, 0.26);
 }
 
-.site-header nav a.admin-nav-alert:hover {
+.site-header nav a.admin-menu-alert:hover,
+.site-header nav a.admin-menu-alert:focus-visible {
     color: #07110f;
     background: #ffad98;
+}
+
+.admin-menu-panel {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    z-index: 3;
+    display: grid;
+    min-width: 150px;
+    padding: 8px;
+    visibility: hidden;
+    background: var(--surface-raised);
+    border: 1px solid rgba(98, 199, 182, 0.22);
+    border-radius: 14px;
+    box-shadow: 0 16px 30px rgba(0, 0, 0, 0.28);
+    opacity: 0;
+    transform: translateY(-5px);
+    transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
+}
+
+.admin-menu:hover .admin-menu-panel,
+.admin-menu:focus-within .admin-menu-panel {
+    visibility: visible;
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.site-header nav .admin-menu-panel a {
+    padding: 9px 11px;
+    color: var(--ink);
+    white-space: nowrap;
+    border-radius: 9px;
+}
+
+.site-header nav .admin-menu-panel a:hover,
+.site-header nav .admin-menu-panel a:focus-visible {
+    color: var(--teal);
+    background: rgba(98, 199, 182, 0.1);
+}
+
+.menu-count {
+    color: var(--coral);
+    font-size: 12px;
+    font-weight: 800;
 }
 
 .nav-badge {
@@ -117,6 +180,10 @@ body {
 @media (prefers-reduced-motion: reduce) {
     .nav-badge {
         animation: none;
+    }
+
+    .admin-menu-panel {
+        transition: none;
     }
 }
 
@@ -837,6 +904,60 @@ small {
     background: var(--panel);
     border: 1px solid rgba(98, 199, 182, 0.28);
     border-radius: 10px;
+}
+
+.updates-section,
+.updates-page {
+    margin-top: 30px;
+}
+
+.updates-list {
+    display: grid;
+    gap: 18px;
+}
+
+.compact-updates {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.update-card {
+    padding: 20px;
+    background: rgba(17, 28, 26, 0.78);
+    border: 1px solid rgba(98, 199, 182, 0.14);
+    border-radius: 18px;
+}
+
+.update-card h2,
+.update-card h3 {
+    margin: 12px 0 8px;
+}
+
+.update-card p {
+    margin: 0;
+    line-height: 1.65;
+}
+
+.update-card ul {
+    margin: 14px 0 0;
+    padding-left: 20px;
+    color: var(--muted);
+    line-height: 1.7;
+}
+
+.update-meta {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    color: var(--coral);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.update-meta span {
+    padding: 3px 8px;
+    color: var(--teal);
+    background: rgba(98, 199, 182, 0.1);
+    border-radius: 999px;
 }
 
 .message-list.compact-list {

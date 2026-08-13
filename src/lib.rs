@@ -10,4 +10,5 @@ pub mod novels;
 pub mod public_messages;
 pub mod rate_limit;
 pub mod time_display;
+pub mod updates;
 pub mod web;

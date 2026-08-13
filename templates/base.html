@@ -16,14 +16,21 @@
       {% if ctx.authenticated %}
         <a href="/profile">{{ ctx.nickname }}</a>
         {% if ctx.is_admin %}
-          {% if ctx.has_pending_memes %}
-            <a class="admin-nav-alert" href="/admin/memes" aria-label="Meme 审核，当前有 {{ ctx.pending_meme_count }} 条待审核">Meme 审核 <span class="nav-badge">{{ ctx.pending_meme_count }}</span></a>
-          {% else %}
-            <a href="/admin/memes">Meme 审核</a>
-          {% endif %}
+          <div class="admin-menu">
+            {% if ctx.has_pending_memes %}
+              <a class="admin-menu-trigger admin-nav-alert" href="/admin/memes" aria-haspopup="true" aria-label="管理菜单，Meme 有 {{ ctx.pending_meme_count }} 条待审核">管理 <span class="nav-badge">{{ ctx.pending_meme_count }}</span></a>
+            {% else %}
+              <a class="admin-menu-trigger" href="/admin/memes" aria-haspopup="true">管理</a>
+            {% endif %}
+            <div class="admin-menu-panel" role="menu">
+              <a href="/admin/memes" role="menuitem">Meme 审核{% if ctx.has_pending_memes %} <span class="menu-count">{{ ctx.pending_meme_count }}</span>{% endif %}</a>
+              {% if ctx.is_super_admin %}
+                <a href="/admin/users" role="menuitem">用户管理</a>
+                <a href="/admin/novels" role="menuitem">小说管理</a>
+              {% endif %}
+            </div>
+          </div>
         {% endif %}
-        {% if ctx.is_super_admin %}<a href="/admin/users">用户管理</a>{% endif %}
-        {% if ctx.is_super_admin %}<a href="/admin/novels">小说管理</a>{% endif %}
         <form action="/logout" method="post" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
           <button class="link-button" type="submit">退出</button>
