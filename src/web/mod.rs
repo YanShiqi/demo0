@@ -18,6 +18,7 @@ use crate::{
     app::AppState,
     auth,
     avatar::{self, DEFAULT_AVATAR},
+    currency,
     error::AppError,
     memes::{self, MemeRow, MemeWithTags, NewMeme},
     model::{PageContext, Role, SessionContext, SessionRow, User},
@@ -29,7 +30,8 @@ use crate::{
     updates::UpdateEntry,
 };
 use views::{
-    AdminMemesTemplate, AdminNovelsTemplate, AdminUserView, AdminUsersTemplate, HomeTemplate,
+    AdminCurrencyTemplate, AdminMemesTemplate, AdminNovelsTemplate, AdminUserView,
+    AdminUsersTemplate, CurrencyLogView, CurrencyTemplate, CurrencyUserView, HomeTemplate,
     LoginTemplate, MemeAdjacentView, MemeDetailTemplate, MemeView, MemesTemplate, MessageView,
     MessagesTemplate, NewMemeTemplate, NovelChapterCommentView, NovelChapterPreviewView,
     NovelChapterTemplate, NovelChapterView, NovelDetailTemplate, NovelView, NovelsTemplate,
@@ -116,6 +118,26 @@ pub struct AdminMemeQuery {
 #[derive(Deserialize, Default)]
 pub struct AdminUsersQuery {
     password_reset: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct CurrencyQuery {
+    page: Option<i64>,
+}
+
+#[derive(Deserialize, Default)]
+pub struct AdminCurrencyQuery {
+    q: Option<String>,
+    user_id: Option<String>,
+    page: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct CurrencyAdjustForm {
+    csrf_token: String,
+    target_user_id: String,
+    amount: i64,
+    note: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -464,6 +486,51 @@ pub async fn messages_page(
     .await
 }
 
+pub async fn currency_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<CurrencyQuery>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let user = require_user(&state, &session).await?;
+    render_currency_page(&state, &session, &user, query.page.unwrap_or(1)).await
+}
+
+async fn render_currency_page(
+    state: &AppState,
+    session: &SessionRow,
+    user: &User,
+    requested_page: i64,
+) -> Result<Response, AppError> {
+    let page_size = state.config.currency.log_page_size;
+    let total = currency::count_logs(&state.pool, &user.id).await?;
+    let total_pages = page_count(total, page_size);
+    let current_page = requested_page.clamp(1, total_pages);
+    let logs = currency::list_logs(&state.pool, &user.id, current_page, page_size)
+        .await?
+        .into_iter()
+        .map(|log| currency_log_view(log, state.config.display.utc_offset_hours))
+        .collect::<Vec<_>>();
+    render(
+        CurrencyTemplate {
+            ctx: page_context_for_user(state, session.csrf_token.clone(), user).await?,
+            currency_name: state.config.currency.name.clone(),
+            currency_symbol: state.config.currency.symbol.clone(),
+            balance: user.currency_balance,
+            has_logs: !logs.is_empty(),
+            logs,
+            current_page,
+            total_pages,
+            previous_page: current_page.saturating_sub(1),
+            has_previous_page: current_page > 1,
+            next_page: current_page.saturating_add(1),
+            has_next_page: current_page < total_pages,
+        },
+        StatusCode::OK,
+        None,
+    )
+}
+
 pub async fn create_message(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -772,6 +839,129 @@ pub async fn admin_memes(
     )
 }
 
+pub async fn admin_currency(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminCurrencyQuery>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let actor = require_admin(&state, &session).await?;
+    let search = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let users = currency::search_users(
+        &state.pool,
+        search,
+        state.config.currency.admin_user_search_limit,
+    )
+    .await?
+    .into_iter()
+    .map(currency_user_view)
+    .collect::<Vec<_>>();
+    let selected = match query.user_id.as_deref() {
+        Some(user_id) => currency::find_user_balance(&state.pool, user_id)
+            .await?
+            .map(currency_user_view),
+        None => None,
+    };
+    let (logs, current_page, total_pages) = if let Some(selected) = selected.as_ref() {
+        let page_size = state.config.currency.log_page_size;
+        let total = currency::count_logs(&state.pool, &selected.id).await?;
+        let total_pages = page_count(total, page_size);
+        let current_page = query.page.unwrap_or(1).clamp(1, total_pages);
+        let logs = currency::list_logs(&state.pool, &selected.id, current_page, page_size)
+            .await?
+            .into_iter()
+            .map(|log| currency_log_view(log, state.config.display.utc_offset_hours))
+            .collect::<Vec<_>>();
+        (logs, current_page, total_pages)
+    } else {
+        (Vec::new(), 1, 1)
+    };
+    render(
+        AdminCurrencyTemplate {
+            ctx: page_context_for_user(&state, session.csrf_token, &actor).await?,
+            currency_name: state.config.currency.name.clone(),
+            currency_symbol: state.config.currency.symbol.clone(),
+            query: search.unwrap_or_default().to_owned(),
+            has_query: search.is_some(),
+            has_users: !users.is_empty(),
+            users,
+            selected_user: selected,
+            has_logs: !logs.is_empty(),
+            logs,
+            current_page,
+            total_pages,
+            previous_page: current_page.saturating_sub(1),
+            has_previous_page: current_page > 1,
+            next_page: current_page.saturating_add(1),
+            has_next_page: current_page < total_pages,
+            can_adjust: actor.parsed_role() == Role::SuperAdmin,
+            max_adjust_amount: state.config.currency.max_admin_adjust_amount,
+            max_note_length: state.config.currency.max_note_length,
+        },
+        StatusCode::OK,
+        None,
+    )
+}
+
+pub async fn grant_currency(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<CurrencyAdjustForm>,
+) -> Result<Response, AppError> {
+    adjust_currency(&state, &headers, form, true).await
+}
+
+pub async fn deduct_currency(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<CurrencyAdjustForm>,
+) -> Result<Response, AppError> {
+    adjust_currency(&state, &headers, form, false).await
+}
+
+async fn adjust_currency(
+    state: &AppState,
+    headers: &HeaderMap,
+    form: CurrencyAdjustForm,
+    grant: bool,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, headers).await?;
+    let actor = require_super_admin(state, &session).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    let mut transaction = state.pool.begin().await?;
+    if grant {
+        currency::grant_currency(
+            &mut transaction,
+            &form.target_user_id,
+            form.amount,
+            &actor,
+            &form.note,
+            &state.config.currency,
+        )
+        .await?;
+    } else {
+        currency::deduct_currency(
+            &mut transaction,
+            &form.target_user_id,
+            form.amount,
+            &actor,
+            &form.note,
+            &state.config.currency,
+        )
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(Redirect::to(&format!(
+        "/admin/currency?user_id={}",
+        percent_encode_query_value(&form.target_user_id)
+    ))
+    .into_response())
+}
+
 pub async fn approve_meme(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -781,7 +971,14 @@ pub async fn approve_meme(
     let session = auth::require_session(&state.pool, &headers).await?;
     let actor = require_admin(&state, &session).await?;
     auth::verify_csrf(&session, &form.csrf_token)?;
-    memes::approve(&state.pool, &meme_id, &actor).await?;
+    let mut transaction = state.pool.begin().await?;
+    let approved =
+        memes::approve_with_reward(&mut transaction, &meme_id, &actor, &state.config.memes).await?;
+    if approved {
+        transaction.commit().await?;
+    } else {
+        transaction.rollback().await?;
+    }
     redirect("/admin/memes", None)
 }
 
@@ -1564,6 +1761,9 @@ async fn render_profile(
             username: user.username.clone(),
             nickname: user.nickname.clone(),
             role_label: user.parsed_role().label(),
+            currency_name: state.config.currency.name.clone(),
+            currency_symbol: state.config.currency.symbol.clone(),
+            currency_balance: user.currency_balance,
             bio: user.bio.clone(),
             has_error: error.is_some(),
             error: error.unwrap_or_default().to_owned(),
@@ -1813,6 +2013,42 @@ fn update_view(update: &UpdateEntry) -> UpdateView {
         summary: update.summary.clone(),
         changes: update.changes.clone(),
     }
+}
+
+fn currency_log_view(log: currency::CurrencyLog, utc_offset_hours: i8) -> CurrencyLogView {
+    let reason_label = match log.reason.as_str() {
+        currency::REASON_ADMIN_GRANT => "管理员发放",
+        currency::REASON_ADMIN_DEDUCT => "管理员扣除",
+        currency::REASON_SPEND => "主动消费",
+        _ => "其他变动",
+    };
+    CurrencyLogView {
+        amount_delta: log.amount_delta,
+        balance_after: log.balance_after,
+        reason_label: reason_label.to_owned(),
+        note: log.note,
+        created_at: time_display::friendly_rfc3339(&log.created_at, utc_offset_hours),
+    }
+}
+
+fn currency_user_view(user: currency::UserBalance) -> CurrencyUserView {
+    let role = Role::from_str(&user.role).unwrap_or(Role::User);
+    CurrencyUserView {
+        href: format!(
+            "/admin/currency?user_id={}",
+            percent_encode_query_value(&user.id)
+        ),
+        id: user.id,
+        username: user.username,
+        nickname: user.nickname,
+        role_label: role.label(),
+        balance: user.currency_balance,
+    }
+}
+
+fn page_count(total: i64, page_size: i64) -> i64 {
+    let total = total.max(1);
+    (total + page_size - 1) / page_size
 }
 
 fn meme_status_label(meme: &MemeRow) -> &'static str {

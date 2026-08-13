@@ -18,6 +18,7 @@ pub struct User {
     pub avatar_media_type: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub currency_balance: i64,
 }
 
 impl User {

@@ -7,7 +7,10 @@ use axum::{
 };
 use demo0::{
     app, auth,
-    config::{Config, DisplayConfig, MemeConfig, MessageConfig, NovelConfig, UpdateConfig},
+    config::{
+        Config, CurrencyConfig, DisplayConfig, MemeConfig, MessageConfig, NovelConfig, UpdateConfig,
+    },
+    currency::{self, CurrencyReason},
     db,
     error::AppError,
     memes::{self, NewMeme},
@@ -174,6 +177,252 @@ async fn public_registration_creates_an_ordinary_user() {
     .await
     .unwrap_err();
     assert!(matches!(duplicate_nickname, AppError::BadRequest(_)));
+}
+
+#[tokio::test]
+async fn new_users_start_with_zero_currency_and_profile_shows_configured_name() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("currency-profile.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let user = auth::create_user(
+        &pool,
+        "currency_profile_user",
+        "货币资料用户",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let balance = sqlx::query_scalar::<_, i64>("SELECT currency_balance FROM users WHERE id = ?")
+        .bind(&user.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(balance, 0);
+
+    let router = app::build(pool, config);
+    let cookie = sign_in(&router, &user.username, "127.0.0.1:43140").await;
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/profile")
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = response_html(response).await;
+    assert!(html.contains("货币余额"));
+    assert!(html.contains("🪙</span> 0 洲币"));
+}
+
+#[tokio::test]
+async fn super_admin_can_adjust_currency_and_spend_is_idempotent() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("currency.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let target = auth::create_user(
+        &pool,
+        "currency_target",
+        "货币目标",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let super_admin = auth::create_user(
+        &pool,
+        "currency_super",
+        "货币超管",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool.clone(), config.clone());
+    let super_cookie = sign_in(&router, &super_admin.username, "127.0.0.1:43141").await;
+    let (_, csrf) = page_session_with_cookie(
+        &router,
+        &format!("/admin/currency?q={}", target.username),
+        &super_cookie,
+    )
+    .await;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/currency/grant")
+                .header(header::COOKIE, &super_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "csrf_token={csrf}&target_user_id={}&amount=25&note=%E6%B4%BB%E5%8A%A8%E5%A5%96%E5%8A%B1",
+                    target.id
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let balance = sqlx::query_scalar::<_, i64>("SELECT currency_balance FROM users WHERE id = ?")
+        .bind(&target.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(balance, 25);
+
+    let mut transaction = pool.begin().await.unwrap();
+    let first = currency::spend_currency(
+        &mut transaction,
+        &target.id,
+        7,
+        CurrencyReason::Spend,
+        Some("shop-item-1"),
+        "shop-order-1",
+        "购买测试物品",
+    )
+    .await
+    .unwrap();
+    transaction.commit().await.unwrap();
+    assert_eq!(first.balance_after, 18);
+
+    let mut retry_transaction = pool.begin().await.unwrap();
+    let retry = currency::spend_currency(
+        &mut retry_transaction,
+        &target.id,
+        7,
+        CurrencyReason::Spend,
+        Some("shop-item-1"),
+        "shop-order-1",
+        "购买测试物品",
+    )
+    .await
+    .unwrap();
+    retry_transaction.commit().await.unwrap();
+    assert_eq!(retry, first);
+    let final_balance =
+        sqlx::query_scalar::<_, i64>("SELECT currency_balance FROM users WHERE id = ?")
+            .bind(&target.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(final_balance, 18);
+
+    let target_cookie = sign_in(&router, &target.username, "127.0.0.1:43142").await;
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/currency")
+                .header(header::COOKIE, target_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = response_html(response).await;
+    assert!(html.contains("18 洲币"));
+    assert!(html.contains("购买测试物品"));
+}
+
+#[tokio::test]
+async fn meme_approval_rewards_provider_once() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("meme-approval-reward.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let provider = auth::create_user(
+        &pool,
+        "reward_provider",
+        "奖励提供者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "reward_admin",
+        "奖励管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    let meme_id = memes::create(
+        &pool,
+        &provider,
+        NewMeme {
+            storage_name: "reward.png".to_owned(),
+            media_type: "image/png".to_owned(),
+            title: "审核奖励测试".to_owned(),
+            tags: Vec::new(),
+        },
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool.clone(), config);
+    let admin_cookie = sign_in(&router, &admin.username, "127.0.0.1:43143").await;
+    let (_, csrf) = page_session_with_cookie(&router, "/admin/memes", &admin_cookie).await;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/memes/{meme_id}/approve"))
+                .header(header::COOKIE, &admin_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let balance = sqlx::query_scalar::<_, i64>("SELECT currency_balance FROM users WHERE id = ?")
+        .bind(&provider.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(balance, 1);
+    let reward_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM currency_logs WHERE user_id = ? AND reason = ? AND related_id = ?",
+    )
+    .bind(&provider.id)
+    .bind("meme_approval_reward")
+    .bind(&meme_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(reward_count, 1);
+
+    let (_, second_csrf) = page_session_with_cookie(&router, "/admin/memes", &admin_cookie).await;
+    let second_response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/admin/memes/{meme_id}/approve"))
+                .header(header::COOKIE, &admin_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={second_csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second_response.status(), StatusCode::SEE_OTHER);
+    let balance_after_retry =
+        sqlx::query_scalar::<_, i64>("SELECT currency_balance FROM users WHERE id = ?")
+            .bind(&provider.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(balance_after_retry, 1);
 }
 
 #[tokio::test]
@@ -2392,6 +2641,8 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             max_tags_per_meme: 5,
             max_tag_length: 20,
             max_title_length: 60,
+            approval_reward_enabled: true,
+            approval_reward_amount: 1,
         },
         novels: NovelConfig {
             home_preview_limit: 5,
@@ -2400,6 +2651,14 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             max_chapter_title_length: 80,
             chapter_comment_max_length: 300,
             chapter_comment_page_size: 50,
+        },
+        currency: CurrencyConfig {
+            name: "洲币".to_owned(),
+            symbol: "🪙".to_owned(),
+            log_page_size: 30,
+            max_admin_adjust_amount: 99_999,
+            admin_user_search_limit: 20,
+            max_note_length: 200,
         },
         updates: UpdateConfig {
             file: temporary.path().join("updates.toml"),

@@ -78,6 +78,66 @@ pub struct MessagesTemplate {
 }
 
 #[derive(Clone, Debug)]
+pub struct CurrencyLogView {
+    pub amount_delta: i64,
+    pub balance_after: i64,
+    pub reason_label: String,
+    pub note: String,
+    pub created_at: String,
+}
+
+#[derive(Template)]
+#[template(path = "currency.html")]
+pub struct CurrencyTemplate {
+    pub ctx: PageContext,
+    pub currency_name: String,
+    pub currency_symbol: String,
+    pub balance: i64,
+    pub logs: Vec<CurrencyLogView>,
+    pub has_logs: bool,
+    pub current_page: i64,
+    pub total_pages: i64,
+    pub previous_page: i64,
+    pub has_previous_page: bool,
+    pub next_page: i64,
+    pub has_next_page: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct CurrencyUserView {
+    pub id: String,
+    pub username: String,
+    pub nickname: String,
+    pub role_label: &'static str,
+    pub balance: i64,
+    pub href: String,
+}
+
+#[derive(Template)]
+#[template(path = "admin_currency.html")]
+pub struct AdminCurrencyTemplate {
+    pub ctx: PageContext,
+    pub currency_name: String,
+    pub currency_symbol: String,
+    pub query: String,
+    pub has_query: bool,
+    pub users: Vec<CurrencyUserView>,
+    pub has_users: bool,
+    pub selected_user: Option<CurrencyUserView>,
+    pub logs: Vec<CurrencyLogView>,
+    pub has_logs: bool,
+    pub current_page: i64,
+    pub total_pages: i64,
+    pub previous_page: i64,
+    pub has_previous_page: bool,
+    pub next_page: i64,
+    pub has_next_page: bool,
+    pub can_adjust: bool,
+    pub max_adjust_amount: i64,
+    pub max_note_length: usize,
+}
+
+#[derive(Clone, Debug)]
 pub struct MemeView {
     pub id: String,
     pub author_user_id: String,
@@ -274,6 +334,9 @@ pub struct ProfileTemplate {
     pub username: String,
     pub nickname: String,
     pub role_label: &'static str,
+    pub currency_name: String,
+    pub currency_symbol: String,
+    pub currency_balance: i64,
     pub bio: String,
     pub has_error: bool,
     pub error: String,

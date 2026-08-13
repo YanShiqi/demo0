@@ -1072,6 +1072,60 @@ button.danger {
     background: var(--danger);
 }
 
+.currency-summary {
+    color: var(--accent);
+    font-weight: 700;
+}
+
+.currency-balance {
+    color: var(--accent);
+    font-size: 28px;
+    font-weight: 800;
+}
+
+.currency-log-list,
+.admin-user-list {
+    display: grid;
+    gap: 10px;
+}
+
+.currency-log-row,
+.admin-user-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line);
+}
+
+.currency-log-row strong {
+    display: inline-block;
+    min-width: 64px;
+}
+
+.currency-log-meta {
+    display: grid;
+    gap: 4px;
+    color: var(--muted);
+    font-size: 13px;
+    text-align: right;
+}
+
+.currency-positive { color: var(--accent); }
+.currency-negative { color: var(--danger); }
+
+.admin-user-row {
+    color: var(--text);
+    text-decoration: none;
+}
+
+.admin-user-row small {
+    display: block;
+    margin-top: 3px;
+    color: var(--muted);
+}
+
 footer {
     padding: 30px;
     color: var(--muted);

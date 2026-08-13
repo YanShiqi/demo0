@@ -59,6 +59,10 @@ max_tags_per_meme = 5
 max_tag_length = 20
 # Meme 标题最大可见字符数。
 max_title_length = 60
+# Meme 首次审核通过时是否发放货币奖励。
+approval_reward_enabled = true
+# 每个 Meme 首次通过时发放的整数货币数量。
+approval_reward_amount = 1
 
 [novels]
 # 首页小说页签最多展示的最近更新章节数量。
@@ -79,3 +83,17 @@ chapter_comment_page_size = 50
 file = "content/updates.toml"
 # 首页独立更新记录区域最多展示的最近条目数。
 home_preview_limit = 3
+
+[currency]
+# 页面展示的货币名称；业务逻辑使用稳定的金额字段，不依赖这个文字。
+name = "洲币"
+# 页面展示的货币符号；可替换为项目喜欢的 emoji 或文字符号。
+symbol = "🪙"
+# 货币流水页每页最多展示的记录数量。
+log_page_size = 30
+# 超级管理员单次增减货币的最大绝对值。
+max_admin_adjust_amount = 99999
+# 管理员搜索用户时最多返回的用户数量。
+admin_user_search_limit = 20
+# 管理员调整货币时备注的最大字符数。
+max_note_length = 200

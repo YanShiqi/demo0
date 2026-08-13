@@ -40,6 +40,7 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
             "/messages",
             get(web::messages_page).post(web::create_message),
         )
+        .route("/currency", get(web::currency_page))
         .route(
             "/messages/{id}/delete",
             axum::routing::post(web::delete_message),
@@ -64,6 +65,15 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
             axum::routing::post(web::create_novel_chapter_comment),
         )
         .route("/admin/memes", get(web::admin_memes))
+        .route("/admin/currency", get(web::admin_currency))
+        .route(
+            "/admin/currency/grant",
+            axum::routing::post(web::grant_currency),
+        )
+        .route(
+            "/admin/currency/deduct",
+            axum::routing::post(web::deduct_currency),
+        )
         .route(
             "/admin/memes/{id}/approve",
             axum::routing::post(web::approve_meme),

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}货币管理 · 牢笼{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">ADMIN · CURRENCY</p>
+  <h1>货币管理</h1>
+  <p class="muted">普通管理员只能查看；超级管理员可以调整用户的 {{ currency_name }}。</p>
+</section>
+<section class="form-card wide">
+  <form class="search-form" action="/admin/currency" method="get">
+    <label for="currency-q">搜索用户名或昵称</label>
+    <input id="currency-q" name="q" value="{{ query }}" placeholder="例如 yanshiqi">
+    <button class="button" type="submit">搜索</button>
+  </form>
+  {% if has_users %}
+  <div class="admin-user-list">
+    {% for item in users %}<a class="admin-user-row" href="{{ item.href }}"><span><strong>{{ item.nickname }}</strong><small>@{{ item.username }} · {{ item.role_label }}</small></span><span>{{ currency_symbol }} {{ item.balance }}</span></a>{% endfor %}
+  </div>
+  {% elif has_query %}<p class="empty-state">没有找到匹配用户。</p>{% endif %}
+</section>
+{% match selected_user %}
+{% when Some with (item) %}
+<section class="form-card wide">
+  <h2>{{ item.nickname }} <small class="muted">@{{ item.username }}</small></h2>
+  <p class="currency-balance"><span aria-hidden="true">{{ currency_symbol }}</span> {{ item.balance }} {{ currency_name }}</p>
+  {% if can_adjust %}
+  <div class="settings-grid">
+    <form class="compact-form" action="/admin/currency/grant" method="post">
+      <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}"><input type="hidden" name="target_user_id" value="{{ item.id }}">
+      <label>发放数量<input type="number" name="amount" min="1" max="{{ max_adjust_amount }}" required></label>
+      <label>备注<input name="note" maxlength="{{ max_note_length }}" required></label><button class="button" type="submit">发放</button>
+    </form>
+    <form class="compact-form" action="/admin/currency/deduct" method="post">
+      <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}"><input type="hidden" name="target_user_id" value="{{ item.id }}">
+      <label>扣除数量<input type="number" name="amount" min="1" max="{{ max_adjust_amount }}" required></label>
+      <label>备注<input name="note" maxlength="{{ max_note_length }}" required></label><button class="button danger" type="submit">扣除</button>
+    </form>
+  </div>
+  {% endif %}
+  {% if has_logs %}<div class="currency-log-list">{% for log in logs %}<article class="currency-log-row"><div><strong class="{% if log.amount_delta > 0 %}currency-positive{% else %}currency-negative{% endif %}">{% if log.amount_delta > 0 %}+{% endif %}{{ log.amount_delta }}</strong><span>{{ log.reason_label }}</span>{% if log.note != "" %}<p class="muted">{{ log.note }}</p>{% endif %}</div><div class="currency-log-meta"><span>余额 {{ log.balance_after }}</span><time>{{ log.created_at }}</time></div></article>{% endfor %}</div>{% else %}<p class="empty-state">该用户暂时没有货币流水。</p>{% endif %}
+  {% if has_logs %}<nav class="pagination" aria-label="用户货币流水分页">{% if has_previous_page %}<a class="button secondary" href="/admin/currency?user_id={{ item.id }}&page=1">第一页</a><a class="button secondary" href="/admin/currency?user_id={{ item.id }}&page={{ previous_page }}">上一页</a>{% endif %}<span class="page-indicator">第 {{ current_page }} / {{ total_pages }} 页</span>{% if has_next_page %}<a class="button secondary" href="/admin/currency?user_id={{ item.id }}&page={{ next_page }}">下一页</a><a class="button secondary" href="/admin/currency?user_id={{ item.id }}&page={{ total_pages }}">最后一页</a>{% endif %}</nav>{% endif %}
+</section>
+{% when None %}{% endmatch %}
+{% endblock %}

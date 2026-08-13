@@ -2,6 +2,7 @@ pub mod app;
 pub mod auth;
 pub mod avatar;
 pub mod config;
+pub mod currency;
 pub mod db;
 pub mod error;
 pub mod memes;

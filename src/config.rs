@@ -30,6 +30,8 @@ const DEFAULT_MEME_POPULAR_TAG_LIMIT: i64 = 10;
 const DEFAULT_MEME_MAX_TAGS_PER_MEME: usize = 5;
 const DEFAULT_MEME_MAX_TAG_LENGTH: usize = 20;
 const DEFAULT_MEME_MAX_TITLE_LENGTH: usize = 60;
+const DEFAULT_MEME_APPROVAL_REWARD_ENABLED: bool = true;
+const DEFAULT_MEME_APPROVAL_REWARD_AMOUNT: i64 = 1;
 const DEFAULT_NOVEL_HOME_PREVIEW_LIMIT: i64 = 5;
 const DEFAULT_NOVEL_CHAPTER_MAX_UPLOAD_BYTES: usize = 256 * 1024;
 const DEFAULT_NOVEL_MAX_TITLE_LENGTH: usize = 60;
@@ -38,6 +40,12 @@ const DEFAULT_NOVEL_CHAPTER_COMMENT_MAX_LENGTH: usize = 300;
 const DEFAULT_NOVEL_CHAPTER_COMMENT_PAGE_SIZE: i64 = 50;
 const DEFAULT_UPDATES_FILE: &str = "content/updates.toml";
 const DEFAULT_UPDATES_HOME_PREVIEW_LIMIT: i64 = 3;
+const DEFAULT_CURRENCY_NAME: &str = "洲币";
+const DEFAULT_CURRENCY_SYMBOL: &str = "🪙";
+const DEFAULT_CURRENCY_LOG_PAGE_SIZE: i64 = 30;
+const DEFAULT_CURRENCY_MAX_ADMIN_ADJUST_AMOUNT: i64 = 99_999;
+const DEFAULT_CURRENCY_ADMIN_USER_SEARCH_LIMIT: i64 = 20;
+const DEFAULT_CURRENCY_MAX_NOTE_LENGTH: usize = 200;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -51,6 +59,7 @@ pub struct Config {
     pub memes: MemeConfig,
     pub novels: NovelConfig,
     pub updates: UpdateConfig,
+    pub currency: CurrencyConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +91,8 @@ pub struct MemeConfig {
     pub max_tags_per_meme: usize,
     pub max_tag_length: usize,
     pub max_title_length: usize,
+    pub approval_reward_enabled: bool,
+    pub approval_reward_amount: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +110,16 @@ pub struct UpdateConfig {
     pub file: PathBuf,
     pub home_preview_limit: i64,
     pub entries: Vec<UpdateEntry>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CurrencyConfig {
+    pub name: String,
+    pub symbol: String,
+    pub log_page_size: i64,
+    pub max_admin_adjust_amount: i64,
+    pub admin_user_search_limit: i64,
+    pub max_note_length: usize,
 }
 
 impl Config {
@@ -142,6 +163,7 @@ impl Config {
         let memes = MemeConfig::from_sources(file_config.memes)?;
         let novels = NovelConfig::from_sources(file_config.novels)?;
         let updates = UpdateConfig::from_sources(file_config.updates)?;
+        let currency = CurrencyConfig::from_sources(file_config.currency)?;
 
         Ok(Self {
             host,
@@ -154,6 +176,7 @@ impl Config {
             memes,
             novels,
             updates,
+            currency,
         })
     }
 
@@ -184,6 +207,54 @@ impl UpdateConfig {
             file,
             home_preview_limit,
             entries,
+        })
+    }
+}
+
+impl CurrencyConfig {
+    fn from_sources(file_config: Option<CurrencyFileConfig>) -> Result<Self> {
+        let file_config = file_config.unwrap_or_default();
+        let name = env::var("CURRENCY_NAME")
+            .ok()
+            .or(file_config.name)
+            .unwrap_or_else(|| DEFAULT_CURRENCY_NAME.to_owned());
+        let symbol = env::var("CURRENCY_SYMBOL")
+            .ok()
+            .or(file_config.symbol)
+            .unwrap_or_else(|| DEFAULT_CURRENCY_SYMBOL.to_owned());
+        let log_page_size = parse_optional_env("CURRENCY_LOG_PAGE_SIZE")?
+            .or(file_config.log_page_size)
+            .unwrap_or(DEFAULT_CURRENCY_LOG_PAGE_SIZE);
+        let max_admin_adjust_amount = parse_optional_env("CURRENCY_MAX_ADMIN_ADJUST_AMOUNT")?
+            .or(file_config.max_admin_adjust_amount)
+            .unwrap_or(DEFAULT_CURRENCY_MAX_ADMIN_ADJUST_AMOUNT);
+        let admin_user_search_limit = parse_optional_env("CURRENCY_ADMIN_USER_SEARCH_LIMIT")?
+            .or(file_config.admin_user_search_limit)
+            .unwrap_or(DEFAULT_CURRENCY_ADMIN_USER_SEARCH_LIMIT);
+        let max_note_length = parse_optional_env("CURRENCY_MAX_NOTE_LENGTH")?
+            .or(file_config.max_note_length)
+            .unwrap_or(DEFAULT_CURRENCY_MAX_NOTE_LENGTH);
+
+        anyhow::ensure!(!name.trim().is_empty(), "CURRENCY_NAME 不能为空");
+        anyhow::ensure!(!symbol.trim().is_empty(), "CURRENCY_SYMBOL 不能为空");
+        anyhow::ensure!(log_page_size > 0, "CURRENCY_LOG_PAGE_SIZE 必须大于 0");
+        anyhow::ensure!(
+            max_admin_adjust_amount > 0,
+            "CURRENCY_MAX_ADMIN_ADJUST_AMOUNT 必须大于 0"
+        );
+        anyhow::ensure!(
+            admin_user_search_limit > 0,
+            "CURRENCY_ADMIN_USER_SEARCH_LIMIT 必须大于 0"
+        );
+        anyhow::ensure!(max_note_length > 0, "CURRENCY_MAX_NOTE_LENGTH 必须大于 0");
+
+        Ok(Self {
+            name,
+            symbol,
+            log_page_size,
+            max_admin_adjust_amount,
+            admin_user_search_limit,
+            max_note_length,
         })
     }
 }
@@ -284,6 +355,12 @@ impl MemeConfig {
         let max_title_length = parse_optional_env("MEME_MAX_TITLE_LENGTH")?
             .or(file_config.max_title_length)
             .unwrap_or(DEFAULT_MEME_MAX_TITLE_LENGTH);
+        let approval_reward_enabled = parse_optional_env("MEME_APPROVAL_REWARD_ENABLED")?
+            .or(file_config.approval_reward_enabled)
+            .unwrap_or(DEFAULT_MEME_APPROVAL_REWARD_ENABLED);
+        let approval_reward_amount = parse_optional_env("MEME_APPROVAL_REWARD_AMOUNT")?
+            .or(file_config.approval_reward_amount)
+            .unwrap_or(DEFAULT_MEME_APPROVAL_REWARD_AMOUNT);
 
         anyhow::ensure!(max_upload_bytes > 0, "MEME_MAX_UPLOAD_BYTES 必须大于 0");
         anyhow::ensure!(max_dimension > 0, "MEME_MAX_DIMENSION 必须大于 0");
@@ -296,6 +373,10 @@ impl MemeConfig {
         anyhow::ensure!(max_tags_per_meme > 0, "MEME_MAX_TAGS_PER_MEME 必须大于 0");
         anyhow::ensure!(max_tag_length > 0, "MEME_MAX_TAG_LENGTH 必须大于 0");
         anyhow::ensure!(max_title_length > 0, "MEME_MAX_TITLE_LENGTH 必须大于 0");
+        anyhow::ensure!(
+            approval_reward_amount > 0,
+            "MEME_APPROVAL_REWARD_AMOUNT 必须大于 0"
+        );
 
         Ok(Self {
             dir,
@@ -310,6 +391,8 @@ impl MemeConfig {
             max_tags_per_meme,
             max_tag_length,
             max_title_length,
+            approval_reward_enabled,
+            approval_reward_amount,
         })
     }
 }
@@ -383,6 +466,7 @@ struct FileConfig {
     memes: Option<MemeFileConfig>,
     novels: Option<NovelFileConfig>,
     updates: Option<UpdatesFileConfig>,
+    currency: Option<CurrencyFileConfig>,
 }
 
 impl FileConfig {
@@ -447,6 +531,8 @@ struct MemeFileConfig {
     max_tags_per_meme: Option<usize>,
     max_tag_length: Option<usize>,
     max_title_length: Option<usize>,
+    approval_reward_enabled: Option<bool>,
+    approval_reward_amount: Option<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -463,6 +549,16 @@ struct NovelFileConfig {
 struct UpdatesFileConfig {
     file: Option<String>,
     home_preview_limit: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CurrencyFileConfig {
+    name: Option<String>,
+    symbol: Option<String>,
+    log_page_size: Option<i64>,
+    max_admin_adjust_amount: Option<i64>,
+    admin_user_search_limit: Option<i64>,
+    max_note_length: Option<usize>,
 }
 
 fn parse_optional_env<T>(name: &str) -> Result<Option<T>>

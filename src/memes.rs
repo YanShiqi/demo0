@@ -3,7 +3,7 @@ use std::io::Cursor;
 use image::{
     AnimationDecoder, GenericImageView, ImageDecoder, ImageFormat, codecs::gif::GifDecoder,
 };
-use sqlx::{FromRow, SqlitePool, sqlite::SqliteQueryResult};
+use sqlx::{FromRow, Sqlite, SqlitePool, Transaction, sqlite::SqliteQueryResult};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use ulid::Ulid;
 use unicode_normalization::UnicodeNormalization;
@@ -11,6 +11,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     config::MemeConfig,
+    currency,
     error::AppError,
     model::{Role, User},
 };
@@ -418,6 +419,50 @@ pub async fn approve(
     Ok(result)
 }
 
+pub async fn approve_with_reward(
+    transaction: &mut Transaction<'_, Sqlite>,
+    meme_id: &str,
+    reviewer: &User,
+    config: &MemeConfig,
+) -> Result<bool, AppError> {
+    ensure_admin(reviewer)?;
+    let reviewed_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| AppError::Internal(format!("格式化 Meme 审核时间失败：{error}")))?;
+    let result = sqlx::query(
+        "UPDATE memes SET status = ?, reviewed_at = ?, reviewed_by = ?
+         WHERE id = ? AND status = ?",
+    )
+    .bind(STATUS_APPROVED)
+    .bind(reviewed_at)
+    .bind(&reviewer.id)
+    .bind(meme_id)
+    .bind(STATUS_PENDING)
+    .execute(&mut **transaction)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Ok(false);
+    }
+    if config.approval_reward_enabled {
+        let provider_user_id =
+            sqlx::query_scalar::<_, String>("SELECT author_user_id FROM memes WHERE id = ?")
+                .bind(meme_id)
+                .fetch_optional(&mut **transaction)
+                .await?
+                .ok_or(AppError::NotFound)?;
+        // 审核状态和奖励流水共用事务，避免出现审核成功但余额未增加。
+        currency::reward_meme_approval(
+            transaction,
+            &provider_user_id,
+            &reviewer.id,
+            meme_id,
+            config.approval_reward_amount,
+        )
+        .await?;
+    }
+    Ok(true)
+}
+
 pub async fn mark_deleted(
     pool: &SqlitePool,
     meme_id: &str,
@@ -762,6 +807,8 @@ mod tests {
             max_tags_per_meme: 5,
             max_tag_length: 20,
             max_title_length: 60,
+            approval_reward_enabled: true,
+            approval_reward_amount: 1,
         }
     }
 

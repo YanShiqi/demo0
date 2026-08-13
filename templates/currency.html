@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ currency_name }} · 牢笼{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">CURRENCY</p>
+  <h1>{{ currency_name }}</h1>
+  <p class="muted">当前余额</p>
+  <p class="currency-balance"><span aria-hidden="true">{{ currency_symbol }}</span> {{ balance }} {{ currency_name }}</p>
+</section>
+<section class="form-card wide">
+  <h2>货币流水</h2>
+  {% if has_logs %}
+  <div class="currency-log-list">
+    {% for log in logs %}
+    <article class="currency-log-row">
+      <div>
+        <strong class="{% if log.amount_delta > 0 %}currency-positive{% else %}currency-negative{% endif %}">{% if log.amount_delta > 0 %}+{% endif %}{{ log.amount_delta }}</strong>
+        <span>{{ log.reason_label }}</span>
+        {% if log.note != "" %}<p class="muted">{{ log.note }}</p>{% endif %}
+      </div>
+      <div class="currency-log-meta"><span>余额 {{ log.balance_after }}</span><time>{{ log.created_at }}</time></div>
+    </article>
+    {% endfor %}
+  </div>
+  <nav class="pagination" aria-label="货币流水分页">
+    {% if has_previous_page %}<a class="button secondary" href="/currency?page=1">第一页</a><a class="button secondary" href="/currency?page={{ previous_page }}">上一页</a>{% else %}<span class="button secondary pagination-disabled">第一页</span><span class="button secondary pagination-disabled">上一页</span>{% endif %}
+    <span class="page-indicator">第 {{ current_page }} / {{ total_pages }} 页</span>
+    {% if has_next_page %}<a class="button secondary" href="/currency?page={{ next_page }}">下一页</a><a class="button secondary" href="/currency?page={{ total_pages }}">最后一页</a>{% else %}<span class="button secondary pagination-disabled">下一页</span><span class="button secondary pagination-disabled">最后一页</span>{% endif %}
+  </nav>
+  {% else %}<p class="empty-state">暂时还没有货币流水。</p>{% endif %}
+</section>
+{% endblock %}

@@ -7,6 +7,8 @@
     <p class="eyebrow">PROFILE</p>
     <h1>{{ nickname }}</h1>
     <p class="muted">@{{ username }} · {{ role_label }}</p>
+    <p class="currency-summary"><span>货币余额</span> · <span aria-hidden="true">{{ currency_symbol }}</span> {{ currency_balance }} {{ currency_name }}</p>
+    <a class="button secondary" href="/currency">查看货币流水</a>
     <a class="button secondary" href="/u/{{ username }}">查看公开主页</a>
   </div>
 </section>
