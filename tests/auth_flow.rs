@@ -334,6 +334,82 @@ async fn super_admin_can_adjust_currency_and_spend_is_idempotent() {
 }
 
 #[tokio::test]
+async fn admin_currency_page_shows_recent_logs_for_all_users() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("currency-recent-logs.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let first_user = auth::create_user(
+        &pool,
+        "recent_log_first",
+        "最近流水甲",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let second_user = auth::create_user(
+        &pool,
+        "recent_log_second",
+        "最近流水乙",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let super_admin = auth::create_user(
+        &pool,
+        "recent_log_admin",
+        "最近流水管理员",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+
+    for index in 0..11 {
+        let target = if index % 2 == 0 {
+            &first_user
+        } else {
+            &second_user
+        };
+        let mut transaction = pool.begin().await.unwrap();
+        currency::grant_currency(
+            &mut transaction,
+            &target.id,
+            1,
+            &super_admin,
+            &format!("recent-{index}"),
+            &config.currency,
+        )
+        .await
+        .unwrap();
+        transaction.commit().await.unwrap();
+    }
+
+    let router = app::build(pool, config);
+    let admin_cookie = sign_in(&router, &super_admin.username, "127.0.0.1:43143").await;
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/admin/currency")
+                .header(header::COOKIE, admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = response_html(response).await;
+    assert!(html.contains("最近货币流水"));
+    assert!(html.contains("@recent_log_first"));
+    assert!(html.contains("@recent_log_second"));
+    assert!(html.contains("recent-10"));
+    assert!(!html.contains("recent-0"));
+}
+
+#[tokio::test]
 async fn weekly_check_in_awards_currency_once() {
     let temporary = TempDir::new().unwrap();
     let database_path = temporary.path().join("weekly-check-in.db");
@@ -1965,6 +2041,7 @@ async fn new_meme_page_includes_client_side_image_preview() {
     assert!(html.contains("id=\"meme-preview-meta\""));
     assert!(html.contains("URL.createObjectURL"));
     assert!(html.contains("meme.addEventListener(\"change\""));
+    assert!(html.contains("审核通过后将奖励 🪙 2 洲币"));
 }
 
 #[tokio::test]
@@ -2966,6 +3043,7 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             name: "洲币".to_owned(),
             symbol: "🪙".to_owned(),
             log_page_size: 30,
+            admin_recent_log_limit: 10,
             max_admin_adjust_amount: 99_999,
             admin_user_search_limit: 20,
             max_note_length: 200,

@@ -36,7 +36,7 @@ use views::{
     MessagesTemplate, NewMemeTemplate, NovelChapterCommentView, NovelChapterPreviewView,
     NovelChapterTemplate, NovelChapterView, NovelDetailTemplate, NovelView, NovelsTemplate,
     PasswordChangeRequiredTemplate, PopularTagView, ProfileTemplate, PublicProfileTemplate,
-    RegisterTemplate, UpdateView, UpdatesTemplate,
+    RecentCurrencyLogView, RegisterTemplate, UpdateView, UpdatesTemplate,
 };
 
 #[derive(Deserialize)]
@@ -928,6 +928,12 @@ pub async fn admin_currency(
 ) -> Result<Response, AppError> {
     let session = auth::require_session(&state.pool, &headers).await?;
     let actor = require_admin(&state, &session).await?;
+    let recent_logs =
+        currency::list_recent_logs(&state.pool, state.config.currency.admin_recent_log_limit)
+            .await?
+            .into_iter()
+            .map(|log| recent_currency_log_view(log, state.config.display.utc_offset_hours))
+            .collect::<Vec<_>>();
     let search = query
         .q
         .as_deref()
@@ -972,6 +978,9 @@ pub async fn admin_currency(
             has_users: !users.is_empty(),
             users,
             selected_user: selected,
+            has_recent_logs: !recent_logs.is_empty(),
+            recent_logs,
+            recent_log_limit: state.config.currency.admin_recent_log_limit,
             has_logs: !logs.is_empty(),
             logs,
             current_page,
@@ -1935,6 +1944,8 @@ async fn render_new_meme(
             max_upload_kib: state.config.memes.max_upload_bytes / 1024,
             max_tags: state.config.memes.max_tags_per_meme,
             max_title_length: state.config.memes.max_title_length,
+            approval_reward_enabled: state.config.memes.approval_reward_enabled,
+            approval_reward_amount: state.config.memes.approval_reward_amount,
         },
         if error.is_some() {
             StatusCode::BAD_REQUEST
@@ -2109,18 +2120,42 @@ fn update_view(update: &UpdateEntry) -> UpdateView {
 }
 
 fn currency_log_view(log: currency::CurrencyLog, utc_offset_hours: i8) -> CurrencyLogView {
-    let reason_label = match log.reason.as_str() {
-        currency::REASON_ADMIN_GRANT => "管理员发放",
-        currency::REASON_ADMIN_DEDUCT => "管理员扣除",
-        currency::REASON_SPEND => "主动消费",
-        _ => "其他变动",
-    };
     CurrencyLogView {
         amount_delta: log.amount_delta,
         balance_after: log.balance_after,
-        reason_label: reason_label.to_owned(),
+        reason_label: currency_reason_label(&log.reason).to_owned(),
         note: log.note,
         created_at: time_display::friendly_rfc3339(&log.created_at, utc_offset_hours),
+    }
+}
+
+fn recent_currency_log_view(
+    log: currency::RecentCurrencyLog,
+    utc_offset_hours: i8,
+) -> RecentCurrencyLogView {
+    RecentCurrencyLogView {
+        user_href: format!(
+            "/admin/currency?user_id={}",
+            percent_encode_query_value(&log.user_id)
+        ),
+        username: log.username,
+        nickname: log.nickname,
+        amount_delta: log.amount_delta,
+        balance_after: log.balance_after,
+        reason_label: currency_reason_label(&log.reason).to_owned(),
+        note: log.note,
+        created_at: time_display::friendly_rfc3339(&log.created_at, utc_offset_hours),
+    }
+}
+
+fn currency_reason_label(reason: &str) -> &'static str {
+    match reason {
+        currency::REASON_ADMIN_GRANT => "管理员发放",
+        currency::REASON_ADMIN_DEDUCT => "管理员扣除",
+        currency::REASON_SPEND => "主动消费",
+        currency::REASON_MEME_APPROVAL_REWARD => "Meme 审核奖励",
+        currency::REASON_WEEKLY_CHECK_IN => "每周签到奖励",
+        _ => "其他变动",
     }
 }
 

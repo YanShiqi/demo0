@@ -91,6 +91,8 @@ name = "洲币"
 symbol = "🪙"
 # 货币流水页每页最多展示的记录数量。
 log_page_size = 30
+# 货币管理页展示所有用户最近流水的数量。
+admin_recent_log_limit = 10
 # 超级管理员单次增减货币的最大绝对值。
 max_admin_adjust_amount = 99999
 # 管理员搜索用户时最多返回的用户数量。

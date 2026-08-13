@@ -18,6 +18,25 @@
   </div>
   {% elif has_query %}<p class="empty-state">没有找到匹配用户。</p>{% endif %}
 </section>
+<section class="form-card wide">
+  <h2>最近货币流水</h2>
+  <p class="muted">展示所有用户最近 {{ recent_log_limit }} 条货币变动记录。</p>
+  {% if has_recent_logs %}
+  <div class="currency-log-list">
+    {% for log in recent_logs %}
+    <article class="currency-log-row">
+      <div>
+        <a class="currency-log-user" href="{{ log.user_href }}"><strong>{{ log.nickname }}</strong> <span class="muted">@{{ log.username }}</span></a>
+        <strong class="{% if log.amount_delta > 0 %}currency-positive{% else %}currency-negative{% endif %}">{% if log.amount_delta > 0 %}+{% endif %}{{ log.amount_delta }}</strong>
+        <span>{{ log.reason_label }}</span>
+        {% if log.note != "" %}<p class="muted">{{ log.note }}</p>{% endif %}
+      </div>
+      <div class="currency-log-meta"><span>余额 {{ log.balance_after }}</span><time>{{ log.created_at }}</time></div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}<p class="empty-state">暂时没有货币流水。</p>{% endif %}
+</section>
 {% match selected_user %}
 {% when Some with (item) %}
 <section class="form-card wide">

@@ -43,6 +43,7 @@ const DEFAULT_UPDATES_HOME_PREVIEW_LIMIT: i64 = 3;
 const DEFAULT_CURRENCY_NAME: &str = "洲币";
 const DEFAULT_CURRENCY_SYMBOL: &str = "🪙";
 const DEFAULT_CURRENCY_LOG_PAGE_SIZE: i64 = 30;
+const DEFAULT_CURRENCY_ADMIN_RECENT_LOG_LIMIT: i64 = 10;
 const DEFAULT_CURRENCY_MAX_ADMIN_ADJUST_AMOUNT: i64 = 99_999;
 const DEFAULT_CURRENCY_ADMIN_USER_SEARCH_LIMIT: i64 = 20;
 const DEFAULT_CURRENCY_MAX_NOTE_LENGTH: usize = 200;
@@ -120,6 +121,7 @@ pub struct CurrencyConfig {
     pub name: String,
     pub symbol: String,
     pub log_page_size: i64,
+    pub admin_recent_log_limit: i64,
     pub max_admin_adjust_amount: i64,
     pub admin_user_search_limit: i64,
     pub max_note_length: usize,
@@ -236,6 +238,9 @@ impl CurrencyConfig {
         let log_page_size = parse_optional_env("CURRENCY_LOG_PAGE_SIZE")?
             .or(file_config.log_page_size)
             .unwrap_or(DEFAULT_CURRENCY_LOG_PAGE_SIZE);
+        let admin_recent_log_limit = parse_optional_env("CURRENCY_ADMIN_RECENT_LOG_LIMIT")?
+            .or(file_config.admin_recent_log_limit)
+            .unwrap_or(DEFAULT_CURRENCY_ADMIN_RECENT_LOG_LIMIT);
         let max_admin_adjust_amount = parse_optional_env("CURRENCY_MAX_ADMIN_ADJUST_AMOUNT")?
             .or(file_config.max_admin_adjust_amount)
             .unwrap_or(DEFAULT_CURRENCY_MAX_ADMIN_ADJUST_AMOUNT);
@@ -250,6 +255,10 @@ impl CurrencyConfig {
         anyhow::ensure!(!symbol.trim().is_empty(), "CURRENCY_SYMBOL 不能为空");
         anyhow::ensure!(log_page_size > 0, "CURRENCY_LOG_PAGE_SIZE 必须大于 0");
         anyhow::ensure!(
+            admin_recent_log_limit > 0,
+            "CURRENCY_ADMIN_RECENT_LOG_LIMIT 必须大于 0"
+        );
+        anyhow::ensure!(
             max_admin_adjust_amount > 0,
             "CURRENCY_MAX_ADMIN_ADJUST_AMOUNT 必须大于 0"
         );
@@ -263,6 +272,7 @@ impl CurrencyConfig {
             name,
             symbol,
             log_page_size,
+            admin_recent_log_limit,
             max_admin_adjust_amount,
             admin_user_search_limit,
             max_note_length,
@@ -585,6 +595,7 @@ struct CurrencyFileConfig {
     name: Option<String>,
     symbol: Option<String>,
     log_page_size: Option<i64>,
+    admin_recent_log_limit: Option<i64>,
     max_admin_adjust_amount: Option<i64>,
     admin_user_search_limit: Option<i64>,
     max_note_length: Option<usize>,

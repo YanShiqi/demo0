@@ -5,6 +5,7 @@
   <p class="eyebrow">SUBMIT MEME</p>
   <h1>提交 Meme</h1>
   <p class="muted">上传后会先进入待审核，通过后才会出现在公开展示墙。</p>
+  {% if approval_reward_enabled %}<p class="form-hint meme-reward-hint">审核通过后将奖励 {{ ctx.currency_symbol }} {{ approval_reward_amount }} {{ ctx.currency_name }}。</p>{% endif %}
   {% if has_error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
   <form action="/memes" method="post" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">

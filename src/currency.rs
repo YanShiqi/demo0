@@ -59,6 +59,19 @@ pub struct CurrencyLog {
 }
 
 #[derive(Clone, Debug, FromRow)]
+pub struct RecentCurrencyLog {
+    pub id: String,
+    pub user_id: String,
+    pub username: String,
+    pub nickname: String,
+    pub amount_delta: i64,
+    pub balance_after: i64,
+    pub reason: String,
+    pub note: String,
+    pub created_at: String,
+}
+
+#[derive(Clone, Debug, FromRow)]
 pub struct UserBalance {
     pub id: String,
     pub username: String,
@@ -350,6 +363,23 @@ pub async fn list_logs(
     .bind(user_id)
     .bind(page_size)
     .bind(offset)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn list_recent_logs(
+    pool: &SqlitePool,
+    limit: i64,
+) -> Result<Vec<RecentCurrencyLog>, AppError> {
+    Ok(sqlx::query_as::<_, RecentCurrencyLog>(
+        "SELECT currency_logs.id, currency_logs.user_id, users.username, users.nickname,
+                currency_logs.amount_delta, currency_logs.balance_after, currency_logs.reason,
+                currency_logs.note, currency_logs.created_at
+         FROM currency_logs
+         INNER JOIN users ON users.id = currency_logs.user_id
+         ORDER BY currency_logs.created_at DESC, currency_logs.id DESC LIMIT ?",
+    )
+    .bind(limit)
     .fetch_all(pool)
     .await?)
 }

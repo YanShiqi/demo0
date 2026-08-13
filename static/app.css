@@ -552,6 +552,11 @@ textarea:focus {
     font-weight: 800;
 }
 
+.meme-reward-hint {
+    color: var(--teal);
+    font-weight: 700;
+}
+
 .meme-upload-preview img {
     display: block;
     width: 100%;
@@ -1192,6 +1197,22 @@ button.danger {
 .currency-log-row strong {
     display: inline-block;
     min-width: 64px;
+}
+
+.currency-log-user {
+    display: inline-flex;
+    gap: 8px;
+    align-items: baseline;
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.currency-log-user:hover {
+    color: var(--teal);
+}
+
+.currency-log-user strong {
+    min-width: 0;
 }
 
 .currency-log-meta {

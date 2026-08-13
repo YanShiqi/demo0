@@ -122,6 +122,18 @@ pub struct CurrencyUserView {
     pub href: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct RecentCurrencyLogView {
+    pub username: String,
+    pub nickname: String,
+    pub user_href: String,
+    pub amount_delta: i64,
+    pub balance_after: i64,
+    pub reason_label: String,
+    pub note: String,
+    pub created_at: String,
+}
+
 #[derive(Template)]
 #[template(path = "admin_currency.html")]
 pub struct AdminCurrencyTemplate {
@@ -133,6 +145,9 @@ pub struct AdminCurrencyTemplate {
     pub users: Vec<CurrencyUserView>,
     pub has_users: bool,
     pub selected_user: Option<CurrencyUserView>,
+    pub recent_logs: Vec<RecentCurrencyLogView>,
+    pub has_recent_logs: bool,
+    pub recent_log_limit: i64,
     pub logs: Vec<CurrencyLogView>,
     pub has_logs: bool,
     pub current_page: i64,
@@ -235,6 +250,8 @@ pub struct NewMemeTemplate {
     pub max_upload_kib: usize,
     pub max_tags: usize,
     pub max_title_length: usize,
+    pub approval_reward_enabled: bool,
+    pub approval_reward_amount: i64,
 }
 
 #[derive(Template)]
