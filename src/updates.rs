@@ -41,10 +41,15 @@ pub fn load_file(path: &Path) -> Result<Vec<UpdateEntry>> {
         );
     }
 
-    let mut entries = document.updates;
-    // 日期已经通过 YYYY-MM-DD 校验，字符串倒序即可得到稳定的时间倒序。
-    entries.sort_by(|left, right| right.date.cmp(&left.date));
-    Ok(entries)
+    let mut entries = document.updates.into_iter().enumerate().collect::<Vec<_>>();
+    // 日期相同的记录按文件追加顺序倒序，保证新追加的同日更新显示在前面。
+    entries.sort_by(|(left_index, left), (right_index, right)| {
+        right
+            .date
+            .cmp(&left.date)
+            .then_with(|| right_index.cmp(left_index))
+    });
+    Ok(entries.into_iter().map(|(_, entry)| entry).collect())
 }
 
 #[cfg(test)]
@@ -80,6 +85,36 @@ mod tests {
         let entries = load_file(&path).unwrap();
 
         assert_eq!(entries[0].version, "0.2.0");
+        assert_eq!(entries[1].version, "0.1.0");
+    }
+
+    #[test]
+    fn sorts_same_day_updates_by_append_order_descending() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("same-day-updates.toml");
+        fs::write(
+            &path,
+            r#"
+                [[updates]]
+                date = "2026-08-13"
+                version = "0.1.0"
+                title = "较早更新"
+                summary = "先发布的内容"
+                changes = ["初始功能"]
+
+                [[updates]]
+                date = "2026-08-13"
+                version = "0.1.1"
+                title = "较新更新"
+                summary = "后发布的内容"
+                changes = ["新增功能"]
+            "#,
+        )
+        .unwrap();
+
+        let entries = load_file(&path).unwrap();
+
+        assert_eq!(entries[0].version, "0.1.1");
         assert_eq!(entries[1].version, "0.1.0");
     }
 
