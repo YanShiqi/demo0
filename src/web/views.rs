@@ -60,6 +60,7 @@ pub struct MessageView {
     pub body: String,
     pub created_at: String,
     pub can_delete: bool,
+    pub show_identity: bool,
 }
 
 #[derive(Template)]
@@ -75,6 +76,7 @@ pub struct MessagesTemplate {
     pub message_limit: i64,
     pub retention_days: i64,
     pub max_length: usize,
+    pub anonymous: bool,
 }
 
 #[derive(Clone, Debug)]

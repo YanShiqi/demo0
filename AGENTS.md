@@ -30,3 +30,7 @@ Prefer portable standard SQL in migrations and application queries. Avoid SQLite
 ## Commit & Pull Request Guidelines
 
 The repository has no commit convention yet. Use short, imperative subjects such as `Add argument parsing` and keep commits focused. Pull requests should explain the motivation and behavior, list validation commands, and link relevant issues. Include output or screenshots for user-visible changes and call out compatibility concerns.
+
+## Server Update Records
+
+For a sufficiently large change—such as a new user-facing feature, database migration, permission change, configuration group, or notable behavior change—automatically add a dated entry to `content/updates.toml`. Include a concise title, summary, and change list. Small bug fixes, refactors, formatting-only changes, and test-only changes do not require a new update entry.

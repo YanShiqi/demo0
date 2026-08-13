@@ -777,7 +777,7 @@ async fn home_uses_server_tabs_for_messages_and_memes() {
     .await
     .unwrap();
     let config = test_config(&temporary, database_url);
-    public_messages::create(&pool, &user.id, "首页留言内容", &config.messages)
+    public_messages::create(&pool, &user.id, "首页留言内容", false, &config.messages)
         .await
         .unwrap();
     approved_meme(&pool, &user, &admin, "home-tab.png", "首页 Meme 标题", 30).await;
@@ -1618,6 +1618,95 @@ async fn users_can_share_and_manage_public_messages() {
     .await
     .unwrap();
     assert!(deleted_at.is_some());
+}
+
+#[tokio::test]
+async fn users_can_publish_anonymous_public_messages_without_bypassing_identity_controls() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("anonymous-messages.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let author = auth::create_user(
+        &pool,
+        "anonymous_message_author",
+        "匿名留言作者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let viewer = auth::create_user(
+        &pool,
+        "anonymous_message_viewer",
+        "留言查看者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool.clone(), test_config(&temporary, database_url));
+    let author_cookie = sign_in(&router, &author.username, "127.0.0.1:43144").await;
+    let (_, author_csrf) = page_session_with_cookie(&router, "/messages", &author_cookie).await;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/messages")
+                .header(header::COOKIE, &author_cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "csrf_token={author_csrf}&body=%E5%8C%BF%E5%90%8D%E7%95%99%E8%A8%80&anonymous=true"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let (message_id, is_anonymous) = sqlx::query_as::<_, (String, bool)>(
+        "SELECT id, is_anonymous FROM public_messages WHERE author_user_id = ?",
+    )
+    .bind(&author.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(is_anonymous);
+
+    let viewer_cookie = sign_in(&router, &viewer.username, "127.0.0.1:43145").await;
+    let viewer_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/messages")
+                    .header(header::COOKIE, &viewer_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(viewer_html.contains("匿名用户"));
+    assert!(!viewer_html.contains("anonymous_message_author"));
+    assert!(!viewer_html.contains("匿名留言作者"));
+
+    let author_html = response_html(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/messages")
+                    .header(header::COOKIE, author_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(author_html.contains("anonymous_message_author"));
+    assert!(author_html.contains("匿名留言作者"));
+    assert!(author_html.contains(&format!("/messages/{message_id}/delete")));
 }
 
 #[tokio::test]

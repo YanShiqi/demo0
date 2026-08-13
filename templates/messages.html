@@ -14,6 +14,7 @@
   <form action="/messages" method="post">
     <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
     <label>内容<textarea name="body" rows="4" placeholder="说点什么，让大家发现你">{{ body }}</textarea><small>{{ max_length }} 个字符以内，支持换行和 emoji</small></label>
+    <label class="checkbox-label"><input type="checkbox" name="anonymous" value="true" {% if anonymous %}checked{% endif %}> 匿名留言 <small>其他用户看不到你的昵称和头像，管理员仍可追溯</small></label>
     <button class="button" type="submit">发布留言</button>
   </form>
 </section>
@@ -25,10 +26,10 @@
   {% if has_messages %}
     {% for message in messages %}
     <article class="message-card">
-      <a class="message-author" href="/u/{{ message.username }}">
+      {% if message.show_identity %}<a class="message-author" href="/u/{{ message.username }}">
         <img class="avatar" src="/users/{{ message.author_user_id }}/avatar" alt="{{ message.nickname }} 的头像">
         <span><strong>{{ message.nickname }}</strong><small>@{{ message.username }} · {{ message.role_label }}</small></span>
-      </a>
+      </a>{% else %}<div class="message-author anonymous-author"><span><strong>匿名用户</strong><small>匿名留言</small></span></div>{% endif %}
       <p class="message-body">{{ message.body }}</p>
       <div class="message-footer">
         <time>{{ message.created_at }}</time>

@@ -101,6 +101,7 @@ pub struct DeleteMemeForm {
 pub struct MessageForm {
     csrf_token: String,
     body: String,
+    anonymous: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -482,6 +483,7 @@ pub async fn messages_page(
         user.as_ref(),
         None,
         String::new(),
+        false,
     )
     .await
 }
@@ -539,11 +541,28 @@ pub async fn create_message(
     let session = auth::require_session(&state.pool, &headers).await?;
     auth::verify_csrf(&session, &form.csrf_token)?;
     let user = require_user(&state, &session).await?;
-    match public_messages::create(&state.pool, &user.id, &form.body, &state.config.messages).await {
+    match public_messages::create(
+        &state.pool,
+        &user.id,
+        &form.body,
+        form.anonymous.is_some(),
+        &state.config.messages,
+    )
+    .await
+    {
         Ok(()) => redirect("/messages", None),
         Err(AppError::BadRequest(message)) => {
             let ctx = page_context_for_user(&state, session.csrf_token.clone(), &user).await?;
-            render_messages(&state, None, ctx, Some(&user), Some(&message), form.body).await
+            render_messages(
+                &state,
+                None,
+                ctx,
+                Some(&user),
+                Some(&message),
+                form.body,
+                form.anonymous.is_some(),
+            )
+            .await
         }
         Err(error) => Err(error),
     }
@@ -1797,6 +1816,7 @@ async fn render_messages(
     current_user: Option<&User>,
     error: Option<&str>,
     body: String,
+    anonymous: bool,
 ) -> Result<Response, AppError> {
     let messages: Vec<MessageView> =
         public_messages::list_recent(&state.pool, &state.config.messages)
@@ -1819,6 +1839,7 @@ async fn render_messages(
             message_limit: state.config.messages.limit_per_user,
             retention_days: state.config.messages.retention_days,
             max_length: state.config.messages.max_length,
+            anonymous,
         },
         if error.is_some() {
             StatusCode::BAD_REQUEST
@@ -1867,6 +1888,11 @@ fn message_view(
         user.id == message.author_user_id
             || matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin)
     });
+    let show_identity = !message.is_anonymous
+        || current_user.is_some_and(|user| {
+            user.id == message.author_user_id
+                || matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin)
+        });
     MessageView {
         id: message.id,
         author_user_id: message.author_user_id,
@@ -1876,6 +1902,7 @@ fn message_view(
         body: message.body,
         created_at: time_display::friendly_rfc3339(&message.created_at, utc_offset_hours),
         can_delete,
+        show_identity,
     }
 }
 
@@ -1890,6 +1917,7 @@ fn home_message_view(message: PublicMessageRow, utc_offset_hours: i8) -> Message
         body: message.body,
         created_at: time_display::friendly_rfc3339(&message.created_at, utc_offset_hours),
         can_delete: false,
+        show_identity: !message.is_anonymous,
     }
 }
 

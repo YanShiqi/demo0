@@ -17,6 +17,7 @@ pub struct PublicMessageRow {
     pub username: String,
     pub nickname: String,
     pub role: String,
+    pub is_anonymous: bool,
 }
 
 pub fn validate_body(body: &str, max_length: usize) -> Result<String, AppError> {
@@ -53,7 +54,7 @@ pub async fn list_recent_limited(
 ) -> Result<Vec<PublicMessageRow>, AppError> {
     let cutoff_epoch = cutoff_epoch(config)?;
     Ok(sqlx::query_as::<_, PublicMessageRow>(
-        "SELECT public_messages.id, public_messages.author_user_id, public_messages.body, public_messages.created_at, users.username, users.nickname, users.role FROM public_messages JOIN users ON users.id = public_messages.author_user_id WHERE public_messages.deleted_at IS NULL AND public_messages.created_at_epoch >= ? ORDER BY public_messages.created_at_epoch DESC, public_messages.id DESC LIMIT ?",
+        "SELECT public_messages.id, public_messages.author_user_id, public_messages.body, public_messages.created_at, users.username, users.nickname, users.role, public_messages.is_anonymous FROM public_messages JOIN users ON users.id = public_messages.author_user_id WHERE public_messages.deleted_at IS NULL AND public_messages.created_at_epoch >= ? ORDER BY public_messages.created_at_epoch DESC, public_messages.id DESC LIMIT ?",
     )
     .bind(cutoff_epoch)
     .bind(limit)
@@ -68,7 +69,7 @@ pub async fn list_by_author(
 ) -> Result<Vec<PublicMessageRow>, AppError> {
     let cutoff_epoch = cutoff_epoch(config)?;
     Ok(sqlx::query_as::<_, PublicMessageRow>(
-        "SELECT public_messages.id, public_messages.author_user_id, public_messages.body, public_messages.created_at, users.username, users.nickname, users.role FROM public_messages JOIN users ON users.id = public_messages.author_user_id WHERE public_messages.author_user_id = ? AND public_messages.deleted_at IS NULL AND public_messages.created_at_epoch >= ? ORDER BY public_messages.created_at_epoch DESC, public_messages.id DESC LIMIT ?",
+        "SELECT public_messages.id, public_messages.author_user_id, public_messages.body, public_messages.created_at, users.username, users.nickname, users.role, public_messages.is_anonymous FROM public_messages JOIN users ON users.id = public_messages.author_user_id WHERE public_messages.author_user_id = ? AND public_messages.deleted_at IS NULL AND public_messages.created_at_epoch >= ? ORDER BY public_messages.created_at_epoch DESC, public_messages.id DESC LIMIT ?",
     )
     .bind(author_user_id)
     .bind(cutoff_epoch)
@@ -81,6 +82,7 @@ pub async fn create(
     pool: &SqlitePool,
     author_user_id: &str,
     body: &str,
+    is_anonymous: bool,
     config: &MessageConfig,
 ) -> Result<(), AppError> {
     let body = validate_body(body, config.max_length)?;
@@ -104,13 +106,14 @@ pub async fn create(
         .format(&Rfc3339)
         .map_err(|error| AppError::Internal(format!("格式化留言时间失败：{error}")))?;
     sqlx::query(
-        "INSERT INTO public_messages (id, author_user_id, body, created_at, created_at_epoch) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO public_messages (id, author_user_id, body, created_at, created_at_epoch, is_anonymous) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(Ulid::new().to_string())
     .bind(author_user_id)
     .bind(body)
     .bind(created_at)
     .bind(now.unix_timestamp())
+    .bind(is_anonymous)
     .execute(pool)
     .await?;
     Ok(())

@@ -1,0 +1,1 @@
+ALTER TABLE public_messages ADD COLUMN is_anonymous BOOLEAN NOT NULL DEFAULT FALSE;
