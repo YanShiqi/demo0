@@ -15,7 +15,7 @@
       <a href="/novels">小说</a>
       <a href="/shop">商城</a>
       {% if ctx.authenticated %}
-        <a href="/vouchers">我的兑换码</a>
+        <a href="/vouchers">我的兑换凭证</a>
         <a class="profile-nav-link" href="/profile"
            title="当前余额：{{ ctx.currency_symbol }} {{ ctx.currency_balance }} {{ ctx.currency_name }}"
            aria-label="{{ ctx.nickname }}，当前余额 {{ ctx.currency_symbol }} {{ ctx.currency_balance }} {{ ctx.currency_name }}"
@@ -31,7 +31,7 @@
               <a href="/admin/memes" role="menuitem">Meme 审核{% if ctx.has_pending_memes %} <span class="menu-count">{{ ctx.pending_meme_count }}</span>{% endif %}</a>
               <a href="/admin/currency" role="menuitem">货币管理</a>
               {% if ctx.is_super_admin %}
-                <a href="/admin/vouchers" role="menuitem">兑换码管理</a>
+                <a href="/admin/vouchers" role="menuitem">Token 核销</a>
                 <a href="/admin/users" role="menuitem">用户管理</a>
                 <a href="/admin/novels" role="menuitem">小说管理</a>
               {% endif %}

@@ -2175,6 +2175,8 @@ async fn management_navigation_groups_admin_links_by_role() {
     let admin_html = response_html(admin_response).await;
     assert!(admin_html.contains("class=\"admin-menu\""));
     assert!(admin_html.contains("href=\"/admin/memes\""));
+    assert!(!admin_html.contains("href=\"/admin/vouchers\""));
+    assert!(!admin_html.contains("Token 核销"));
     assert!(!admin_html.contains("href=\"/admin/users\""));
     assert!(!admin_html.contains("href=\"/admin/novels\""));
 
@@ -2192,6 +2194,8 @@ async fn management_navigation_groups_admin_links_by_role() {
     let super_html = response_html(super_response).await;
     assert!(super_html.contains("class=\"admin-menu\""));
     assert!(super_html.contains("href=\"/admin/memes\""));
+    assert!(super_html.contains("href=\"/admin/vouchers\""));
+    assert!(super_html.contains("Token 核销"));
     assert!(super_html.contains("href=\"/admin/users\""));
     assert!(super_html.contains("href=\"/admin/novels\""));
 }

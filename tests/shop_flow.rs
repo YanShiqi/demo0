@@ -748,6 +748,73 @@ async fn disabled_shop_hides_pages_but_keeps_historical_icons_available() {
 }
 
 #[tokio::test]
+async fn shop_navigation_is_role_appropriate() {
+    let fixture = ShopFixture::new().await;
+
+    let anonymous_html = response_html(fixture.get("/shop", None).await).await;
+    assert!(anonymous_html.contains("href=\"/shop\""));
+
+    let buyer_cookie = fixture.sign_in_user(&fixture.buyer.username).await;
+    let shop_html = fixture.get_html("/shop", &buyer_cookie).await;
+    let profile_html = fixture.get_html("/profile", &buyer_cookie).await;
+    assert!(shop_html.contains("href=\"/vouchers\""));
+    assert!(shop_html.contains("我的兑换凭证"));
+    assert!(profile_html.contains("href=\"/vouchers\""));
+    assert!(profile_html.contains("我的兑换凭证"));
+
+    let admin_cookie = fixture.sign_in_user(&fixture.admin.username).await;
+    let admin_html = fixture.get_html("/shop", &admin_cookie).await;
+    assert!(!admin_html.contains("href=\"/admin/vouchers\""));
+    assert!(!admin_html.contains("Token 核销"));
+
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let super_admin_html = fixture.get_html("/shop", &super_cookie).await;
+    assert!(super_admin_html.contains("href=\"/admin/vouchers\""));
+    assert!(super_admin_html.contains("Token 核销"));
+}
+
+#[tokio::test]
+async fn complete_token_appears_only_in_the_one_time_reveal_response() {
+    let fixture = ShopFixture::new().await;
+    fixture.grant_buyer_currency(50).await;
+    let (buyer_cookie, csrf) = fixture.sign_in_buyer().await;
+    let reveal_response = fixture
+        .purchase(
+            &buyer_cookie,
+            &csrf,
+            "milk_tea",
+            &ulid::Ulid::new().to_string(),
+        )
+        .await;
+    let reveal_html = response_html(reveal_response).await;
+    let token = between(&reveal_html, "data-token=\"", "\"").to_owned();
+    assert!(token.starts_with("ZV1-"));
+    assert!(reveal_html.contains(&token));
+
+    for path in ["/shop", "/profile", "/vouchers"] {
+        let html = fixture.get_html(path, &buyer_cookie).await;
+        assert!(!html.contains(&token), "complete Token leaked on {path}");
+    }
+
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let admin_html = fixture.get_html("/admin/vouchers", &super_cookie).await;
+    assert!(!admin_html.contains(&token));
+
+    let admin_csrf = between(&admin_html, "name=\"csrf_token\" value=\"", "\"");
+    let lookup_html = response_html(
+        fixture
+            .post(
+                "/admin/vouchers/lookup",
+                Some(&super_cookie),
+                &format!("csrf_token={admin_csrf}&token={token}"),
+            )
+            .await,
+    )
+    .await;
+    assert!(!lookup_html.contains(&token));
+}
+
+#[tokio::test]
 async fn player_vouchers_are_paginated_and_isolated_by_user() {
     let fixture = ShopFixture::new().await;
     fixture.grant_buyer_currency(100).await;

@@ -6,6 +6,7 @@
   <h1>兑换商城</h1>
   {% if ctx.authenticated %}
   <p class="muted">使用 {{ ctx.currency_symbol }} {{ ctx.currency_name }} 兑换商品。每次购买都会生成一枚仅展示一次的兑换码。</p>
+  <a class="button secondary" href="/vouchers">我的兑换凭证</a>
   {% else %}
   <p class="muted">商品可公开浏览。<a href="/login">登录</a>后即可使用货币兑换。</p>
   {% endif %}
