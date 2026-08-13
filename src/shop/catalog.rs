@@ -81,7 +81,7 @@ pub fn validate_icon_file_name(file_name: &str) -> Result<()> {
     );
     anyhow::ensure!(
         icon_media_type(file_name).is_some(),
-        "图标文件扩展名必须是 PNG、JPEG、GIF 或 WebP"
+        "图标文件扩展名必须是 PNG、JPEG 或 WebP"
     );
     Ok(())
 }
@@ -91,7 +91,6 @@ pub fn icon_media_type(file_name: &str) -> Option<&'static str> {
     match Path::new(file_name).extension()?.to_str()? {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
-        "gif" => Some("image/gif"),
         "webp" => Some("image/webp"),
         _ => None,
     }
@@ -197,13 +196,19 @@ fn validate_icon_file(
         product.id,
         product.icon_file
     );
-    let image = ImageReader::new(std::io::Cursor::new(bytes))
+    // 仅读取图片头中的尺寸，先拦截超大图片，避免为其像素缓冲区分配内存。
+    let (width, height) = ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .context("图标格式识别失败")?
-        .decode()
-        .with_context(|| format!("商品 {} 的图标 {} 无法解码", product.id, product.icon_file))?;
+        .into_dimensions()
+        .with_context(|| {
+            format!(
+                "商品 {} 的图标 {} 无法读取尺寸",
+                product.id, product.icon_file
+            )
+        })?;
     anyhow::ensure!(
-        image.width() <= icon_max_dimension && image.height() <= icon_max_dimension,
+        width <= icon_max_dimension && height <= icon_max_dimension,
         "商品 {} 的图标 {} 尺寸超过 {} 像素限制",
         product.id,
         product.icon_file,
@@ -216,7 +221,6 @@ fn expected_image_format(file_name: &str) -> Option<ImageFormat> {
     match Path::new(file_name).extension()?.to_str()? {
         "png" => Some(ImageFormat::Png),
         "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
-        "gif" => Some(ImageFormat::Gif),
         "webp" => Some(ImageFormat::WebP),
         _ => None,
     }
@@ -323,5 +327,47 @@ sort_order = 10
 
         let error = load_products(&file, &icon_dir, 256 * 1024, 1024).unwrap_err();
         assert!(error.to_string().contains("same"));
+    }
+
+    #[test]
+    fn rejects_gif_icons() {
+        let temporary = tempfile::tempdir().unwrap();
+        let icon_dir = temporary.path().join("icons");
+        std::fs::create_dir_all(&icon_dir).unwrap();
+        image::DynamicImage::new_rgba8(2, 2)
+            .save(icon_dir.join("token.gif"))
+            .unwrap();
+        let file = temporary.path().join("shop.toml");
+        write_product(&file, "gif", "token.gif");
+
+        let error = load_products(&file, &icon_dir, 256 * 1024, 1024).unwrap_err();
+        assert!(error.to_string().contains("gif"));
+        assert_eq!(icon_media_type("token.gif"), None);
+    }
+
+    #[test]
+    fn rejects_icon_dimensions_before_decoding_pixels() {
+        let temporary = tempfile::tempdir().unwrap();
+        let icon_dir = temporary.path().join("icons");
+        std::fs::create_dir_all(&icon_dir).unwrap();
+        image::DynamicImage::new_rgba8(2, 2)
+            .save(icon_dir.join("large.png"))
+            .unwrap();
+        let file = temporary.path().join("shop.toml");
+        write_product(&file, "large", "large.png");
+
+        let error = load_products(&file, &icon_dir, 256 * 1024, 1).unwrap_err();
+        assert!(error.to_string().contains("large"));
+        assert!(error.to_string().contains("尺寸"));
+    }
+
+    fn write_product(file: &Path, id: &str, icon_file: &str) {
+        std::fs::write(
+            file,
+            format!(
+                "[[products]]\nid = {id:?}\nname = \"名称\"\ndescription = \"说明\"\nicon_file = {icon_file:?}\nprice = 1\nmax_active_per_user = 1\nenabled = true\nsort_order = 1\n"
+            ),
+        )
+        .unwrap();
     }
 }

@@ -9,7 +9,7 @@ use demo0::{
     app, auth, check_in,
     config::{
         CheckInConfig, Config, CurrencyConfig, DisplayConfig, MemeConfig, MessageConfig,
-        NovelConfig, UpdateConfig,
+        NovelConfig, ShopConfig, UpdateConfig,
     },
     currency::{self, CurrencyReason},
     db,
@@ -3051,6 +3051,19 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
         check_in: CheckInConfig {
             enabled: true,
             reward_amount: 1,
+        },
+        shop: ShopConfig {
+            enabled: true,
+            products_file: temporary.path().join("shop.toml"),
+            icon_dir: temporary.path().join("shop-icons"),
+            page_size: 12,
+            voucher_page_size: 20,
+            admin_note_max_length: 200,
+            token_lookup_max_attempts: 20,
+            token_lookup_window_seconds: 60,
+            icon_max_bytes: 256 * 1024,
+            icon_max_dimension: 1024,
+            products: Vec::new(),
         },
         updates: UpdateConfig {
             file: temporary.path().join("updates.toml"),
