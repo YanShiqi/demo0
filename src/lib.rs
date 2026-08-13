@@ -11,6 +11,7 @@ pub mod model;
 pub mod novels;
 pub mod public_messages;
 pub mod rate_limit;
+pub mod shop;
 pub mod time_display;
 pub mod updates;
 pub mod web;

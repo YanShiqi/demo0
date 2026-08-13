@@ -105,3 +105,25 @@ max_note_length = 200
 enabled = true
 # 每周签到成功后发放的整数货币数量。
 reward_amount = 1
+
+[shop]
+# 是否开启商城；关闭后后续功能不应向普通用户展示兑换入口。
+enabled = true
+# 商品目录 TOML 的路径；新增或调整商品时编辑此文件。
+products_file = "content/shop.toml"
+# 商品图标静态文件目录；图标文件名必须与商品目录中的配置一致。
+icon_dir = "static/shop/products"
+# 商城商品列表每页展示数量。
+page_size = 12
+# 用户兑换券列表每页展示数量。
+voucher_page_size = 20
+# 管理员备注允许的最大可见字符数。
+admin_note_max_length = 200
+# 单个来源在兑换码查询窗口内允许的最大尝试次数。
+token_lookup_max_attempts = 20
+# 兑换码查询限流窗口，单位为秒。
+token_lookup_window_seconds = 60
+# 商品图标文件最大体积，单位为字节。
+icon_max_bytes = 262144
+# 商品图标允许的最大宽度或高度，单位为像素。
+icon_max_dimension = 1024

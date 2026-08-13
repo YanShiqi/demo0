@@ -14,7 +14,7 @@ base64 = "0.22"
 cookie = "0.18"
 dotenvy = "0.15"
 hex = "0.4"
-image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 pulldown-cmark = "0.13.4"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rpassword = "7"
