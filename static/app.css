@@ -214,9 +214,131 @@ body {
         animation: none;
     }
 
+    .voucher-warning {
+        animation: none;
+    }
+
     .admin-menu-panel {
         transition: none;
     }
+}
+
+.shop-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px;
+}
+
+.shop-product-card,
+.voucher-row {
+    display: flex;
+    gap: 18px;
+    align-items: flex-start;
+    padding: 22px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+}
+
+.shop-product-card {
+    flex-direction: column;
+}
+
+.shop-product-card h2,
+.voucher-row h2 {
+    margin: 0;
+}
+
+.shop-product-icon,
+.voucher-icon {
+    width: 64px;
+    height: 64px;
+    object-fit: cover;
+    border-radius: 14px;
+    background: var(--surface-raised);
+}
+
+.shop-product-copy p,
+.voucher-row p {
+    color: var(--muted);
+}
+
+.shop-product-meta {
+    display: grid;
+    gap: 6px;
+    margin: 18px 0;
+}
+
+.shop-product-meta div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.shop-product-meta dt {
+    color: var(--muted);
+}
+
+.shop-product-meta dd {
+    margin: 0;
+}
+
+.shop-purchase-form {
+    width: 100%;
+}
+
+.voucher-reveal-card {
+    max-width: 680px;
+}
+
+.voucher-warning {
+    padding: 14px;
+    color: #20100c;
+    font-weight: 800;
+    background: var(--coral);
+    border-radius: 10px;
+    animation: voucher-warning-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes voucher-warning-pulse {
+    0%, 100% { box-shadow: 0 0 0 rgba(255, 152, 127, 0); }
+    50% { box-shadow: 0 0 22px rgba(255, 152, 127, 0.72); }
+}
+
+.voucher-token,
+.voucher-row code {
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+    margin: 20px 0;
+    padding: 14px;
+    overflow-wrap: anywhere;
+    color: var(--teal);
+    font-size: 16px;
+    background: #07110f;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+}
+
+.voucher-list {
+    display: grid;
+    gap: 14px;
+}
+
+.voucher-row > div:nth-child(2) {
+    flex: 1;
+}
+
+.voucher-meta {
+    display: grid;
+    gap: 8px;
+    min-width: 150px;
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.voucher-meta strong {
+    color: var(--success);
 }
 
 .link-button {

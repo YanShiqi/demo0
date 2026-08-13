@@ -13,7 +13,9 @@
       <a href="/messages">留言板</a>
       <a href="/memes">Memes</a>
       <a href="/novels">小说</a>
+      <a href="/shop">商城</a>
       {% if ctx.authenticated %}
+        <a href="/vouchers">我的兑换码</a>
         <a class="profile-nav-link" href="/profile"
            title="当前余额：{{ ctx.currency_symbol }} {{ ctx.currency_balance }} {{ ctx.currency_name }}"
            aria-label="{{ ctx.nickname }}，当前余额 {{ ctx.currency_symbol }} {{ ctx.currency_balance }} {{ ctx.currency_name }}"

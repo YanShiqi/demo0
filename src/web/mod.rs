@@ -1,3 +1,4 @@
+pub mod shop;
 mod views;
 
 use std::{net::SocketAddr, str::FromStr};
@@ -38,6 +39,8 @@ use views::{
     PasswordChangeRequiredTemplate, PopularTagView, ProfileTemplate, PublicProfileTemplate,
     RecentCurrencyLogView, RegisterTemplate, UpdateView, UpdatesTemplate,
 };
+
+pub use shop::{purchase_product, shop_page, shop_product_icon, voucher_list};
 
 #[derive(Deserialize)]
 pub struct RegisterForm {

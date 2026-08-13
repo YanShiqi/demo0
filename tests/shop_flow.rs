@@ -1,4 +1,10 @@
-use std::path::Path;
+use std::{net::SocketAddr, path::Path};
+
+use axum::{
+    body::Body,
+    extract::ConnectInfo,
+    http::{Request, StatusCode, header},
+};
 
 use demo0::{
     auth,
@@ -10,8 +16,10 @@ use demo0::{
     shop::{self, catalog::ShopProduct, store},
     updates::UpdateEntry,
 };
+use http_body_util::BodyExt;
 use tempfile::TempDir;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use tower::ServiceExt;
 
 const CREATED_AT: &str = "2026-08-13T12:00:00Z";
 
@@ -605,4 +613,425 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             products: Vec::new(),
         },
     }
+}
+
+#[tokio::test]
+async fn first_purchase_reveals_token_once_and_duplicate_request_does_not() {
+    let fixture = ShopFixture::new().await;
+    fixture.grant_buyer_currency(50).await;
+    let (cookie, csrf) = fixture.sign_in_buyer().await;
+    let purchase_key = ulid::Ulid::new().to_string();
+
+    let first = fixture
+        .purchase(&cookie, &csrf, "milk_tea", &purchase_key)
+        .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(first.headers()[header::CACHE_CONTROL], "no-store");
+    let first_html = response_html(first).await;
+    assert!(first_html.contains("请立即复制并妥善保存"));
+    assert!(first_html.contains("data-token=\"ZV1-"));
+
+    let duplicate = fixture
+        .purchase(&cookie, &csrf, "milk_tea", &purchase_key)
+        .await;
+    assert_eq!(duplicate.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        duplicate.headers()[header::LOCATION],
+        "/vouchers?purchase=already"
+    );
+    let list_html = fixture.get_html("/vouchers", &cookie).await;
+    assert!(list_html.contains("ZV1-****-"));
+    assert!(!list_html.contains("data-token=\"ZV1-"));
+}
+
+#[tokio::test]
+async fn player_catalog_is_public_but_purchase_and_vouchers_require_login() {
+    let fixture = ShopFixture::new().await;
+
+    let catalog = fixture.get("/shop", None).await;
+    assert_eq!(catalog.status(), StatusCode::OK);
+    assert!(response_html(catalog).await.contains("奶茶兑换码"));
+
+    let purchase = fixture
+        .post(
+            "/shop/products/milk_tea/purchase",
+            None,
+            "csrf_token=x&purchase_key=01K2H7V9W4RRDMC0P9A8C5P001",
+        )
+        .await;
+    assert_eq!(purchase.status(), StatusCode::UNAUTHORIZED);
+    let vouchers = fixture.get("/vouchers", None).await;
+    assert_eq!(vouchers.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn player_catalog_respects_the_configured_page_size() {
+    let fixture = ShopFixture::new().await;
+
+    let first_page = response_html(fixture.get("/shop?page=1", None).await).await;
+    assert!(first_page.contains("奶茶兑换码"));
+    assert!(first_page.contains("礼品卡兑换码"));
+    assert!(!first_page.contains("茶饮兑换码"));
+    assert!(first_page.contains("第 1 / 2 页"));
+
+    let second_page = response_html(fixture.get("/shop?page=2", None).await).await;
+    assert!(second_page.contains("茶饮兑换码"));
+    assert!(!second_page.contains("奶茶兑换码"));
+    assert!(second_page.contains("第 2 / 2 页"));
+}
+
+#[tokio::test]
+async fn player_catalog_marks_insufficient_balance_and_active_limit_as_disabled() {
+    let fixture = ShopFixture::new().await;
+    let (cookie, csrf) = fixture.sign_in_buyer().await;
+
+    let insufficient = fixture.get_html("/shop", &cookie).await;
+    assert!(insufficient.contains("余额不足"));
+
+    fixture.grant_buyer_currency(50).await;
+    let first = fixture
+        .purchase(&cookie, &csrf, "milk_tea", &ulid::Ulid::new().to_string())
+        .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let limited = fixture.get_html("/shop", &cookie).await;
+    assert!(limited.contains("有效兑换码持有数量已达上限"));
+}
+
+#[tokio::test]
+async fn player_rejects_unknown_or_disabled_products_and_serves_safe_icons() {
+    let fixture = ShopFixture::new().await;
+    fixture.grant_buyer_currency(50).await;
+    let (cookie, csrf) = fixture.sign_in_buyer().await;
+
+    for product_id in ["missing", "sold_out"] {
+        let response = fixture
+            .purchase(&cookie, &csrf, product_id, &ulid::Ulid::new().to_string())
+            .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    let icon = fixture
+        .get("/static/shop/products/milk-tea.png", None)
+        .await;
+    assert_eq!(icon.status(), StatusCode::OK);
+    assert_eq!(icon.headers()[header::CONTENT_TYPE], "image/png");
+    assert_eq!(icon.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(
+        icon.headers()[header::CACHE_CONTROL],
+        "public, max-age=86400"
+    );
+    let unsafe_icon = fixture
+        .get("/static/shop/products/../milk-tea.png", None)
+        .await;
+    assert_eq!(unsafe_icon.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn disabled_shop_hides_pages_but_keeps_historical_icons_available() {
+    let fixture = ShopFixture::new_with_shop_enabled(false).await;
+
+    assert_eq!(
+        fixture.get("/shop", None).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        fixture.get("/vouchers", None).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        fixture
+            .get("/static/shop/products/milk-tea.png", None)
+            .await
+            .status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn player_vouchers_are_paginated_and_isolated_by_user() {
+    let fixture = ShopFixture::new().await;
+    fixture.grant_buyer_currency(100).await;
+    let (buyer_cookie, buyer_csrf) = fixture.sign_in_buyer().await;
+    for _ in 0..3 {
+        let response = fixture
+            .purchase(
+                &buyer_cookie,
+                &buyer_csrf,
+                "gift_card",
+                &ulid::Ulid::new().to_string(),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let first_page = fixture.get_html("/vouchers?page=1", &buyer_cookie).await;
+    assert!(first_page.contains("第 1 / 2 页"));
+    let second_page = fixture.get_html("/vouchers?page=2", &buyer_cookie).await;
+    assert!(second_page.contains("第 2 / 2 页"));
+
+    let admin_cookie = fixture.sign_in_user(&fixture.admin.username).await;
+    let admin_page = fixture.get_html("/vouchers", &admin_cookie).await;
+    assert!(!admin_page.contains("礼品卡兑换码"));
+}
+
+#[allow(dead_code)]
+struct ShopFixture {
+    temporary: TempDir,
+    pool: sqlx::SqlitePool,
+    router: axum::Router,
+    buyer: demo0::model::User,
+    admin: demo0::model::User,
+    super_admin: demo0::model::User,
+}
+
+impl ShopFixture {
+    async fn new() -> Self {
+        Self::new_with_shop_enabled(true).await
+    }
+
+    async fn new_with_shop_enabled(shop_enabled: bool) -> Self {
+        let temporary = tempfile::tempdir().unwrap();
+        let database_url = sqlite_url(&temporary.path().join("shop-flow.db"));
+        let pool = demo0::db::connect(&database_url).await.unwrap();
+        let mut config = test_config(&temporary, database_url);
+        create_shop_icon(&config.shop.icon_dir, "milk-tea.png");
+        create_shop_icon(&config.shop.icon_dir, "gift-card.png");
+        create_shop_icon(&config.shop.icon_dir, "tea-coupon.png");
+        config.shop.page_size = 2;
+        config.shop.voucher_page_size = 2;
+        config.shop.enabled = shop_enabled;
+        config.shop.products = vec![
+            ShopProduct {
+                id: "milk_tea".to_owned(),
+                name: "奶茶兑换码".to_owned(),
+                description: "一杯奶茶的兑换凭证".to_owned(),
+                icon_file: "milk-tea.png".to_owned(),
+                price: 50,
+                valid_days: Some(30),
+                max_active_per_user: 1,
+                enabled: true,
+                sort_order: 1,
+            },
+            ShopProduct {
+                id: "gift_card".to_owned(),
+                name: "礼品卡兑换码".to_owned(),
+                description: "可重复购买的礼品卡凭证".to_owned(),
+                icon_file: "gift-card.png".to_owned(),
+                price: 10,
+                valid_days: None,
+                max_active_per_user: 5,
+                enabled: true,
+                sort_order: 2,
+            },
+            ShopProduct {
+                id: "tea_coupon".to_owned(),
+                name: "茶饮兑换码".to_owned(),
+                description: "另一种可兑换的茶饮凭证".to_owned(),
+                icon_file: "tea-coupon.png".to_owned(),
+                price: 10,
+                valid_days: None,
+                max_active_per_user: 1,
+                enabled: true,
+                sort_order: 3,
+            },
+            ShopProduct {
+                id: "sold_out".to_owned(),
+                name: "已下架商品".to_owned(),
+                description: "不应允许购买".to_owned(),
+                icon_file: "gift-card.png".to_owned(),
+                price: 10,
+                valid_days: None,
+                max_active_per_user: 1,
+                enabled: false,
+                sort_order: 4,
+            },
+        ];
+        let buyer = auth::create_user(
+            &pool,
+            "shop_buyer",
+            "商城买家",
+            "correct horse battery",
+            Role::User,
+        )
+        .await
+        .unwrap();
+        let admin = auth::create_user(
+            &pool,
+            "shop_admin",
+            "商城管理员",
+            "correct horse battery",
+            Role::Admin,
+        )
+        .await
+        .unwrap();
+        let super_admin = auth::create_user(
+            &pool,
+            "shop_super",
+            "商城超管",
+            "correct horse battery",
+            Role::SuperAdmin,
+        )
+        .await
+        .unwrap();
+        let router = demo0::app::build(pool.clone(), config);
+        Self {
+            temporary,
+            pool,
+            router,
+            buyer,
+            admin,
+            super_admin,
+        }
+    }
+
+    async fn grant_buyer_currency(&self, amount: i64) {
+        sqlx::query("UPDATE users SET currency_balance = ? WHERE id = ?")
+            .bind(amount)
+            .bind(&self.buyer.id)
+            .execute(&self.pool)
+            .await
+            .unwrap();
+    }
+
+    async fn sign_in_buyer(&self) -> (String, String) {
+        let cookie = self.sign_in_user(&self.buyer.username).await;
+        let html = self.get_html("/shop", &cookie).await;
+        (
+            cookie,
+            between(&html, "name=\"csrf_token\" value=\"", "\"").to_owned(),
+        )
+    }
+
+    async fn sign_in_user(&self, username: &str) -> String {
+        let session = self.get("/login", None).await;
+        let cookie = response_cookie(&session);
+        let csrf = between(
+            &response_html(session).await,
+            "name=\"csrf_token\" value=\"",
+            "\"",
+        )
+        .to_owned();
+        let response = self
+            .post_with_connect_info(
+                "/login",
+                &cookie,
+                &format!("csrf_token={csrf}&username={username}&password=correct+horse+battery"),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        response_cookie(&response)
+    }
+
+    async fn purchase(
+        &self,
+        cookie: &str,
+        csrf: &str,
+        product_id: &str,
+        purchase_key: &str,
+    ) -> axum::response::Response {
+        self.post(
+            &format!("/shop/products/{product_id}/purchase"),
+            Some(cookie),
+            &format!("csrf_token={csrf}&purchase_key={purchase_key}"),
+        )
+        .await
+    }
+
+    async fn get_html(&self, path: &str, cookie: &str) -> String {
+        response_html(self.get(path, Some(cookie)).await).await
+    }
+
+    async fn get(&self, uri: &str, cookie: Option<&str>) -> axum::response::Response {
+        let mut request = Request::builder().uri(uri);
+        if let Some(cookie) = cookie {
+            request = request.header(header::COOKIE, cookie);
+        }
+        self.router
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    async fn post(&self, uri: &str, cookie: Option<&str>, body: &str) -> axum::response::Response {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+        if let Some(cookie) = cookie {
+            request = request.header(header::COOKIE, cookie);
+        }
+        self.router
+            .clone()
+            .oneshot(request.body(Body::from(body.to_owned())).unwrap())
+            .await
+            .unwrap()
+    }
+
+    async fn post_with_connect_info(
+        &self,
+        uri: &str,
+        cookie: &str,
+        body: &str,
+    ) -> axum::response::Response {
+        self.router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header(header::COOKIE, cookie)
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .extension(ConnectInfo(
+                        "127.0.0.1:43199".parse::<SocketAddr>().unwrap(),
+                    ))
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+}
+
+fn create_shop_icon(icon_dir: &Path, name: &str) {
+    std::fs::create_dir_all(icon_dir).unwrap();
+    image::DynamicImage::new_rgba8(2, 2)
+        .save(icon_dir.join(name))
+        .unwrap();
+}
+
+fn response_cookie(response: &axum::response::Response) -> String {
+    response
+        .headers()
+        .get(header::SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned()
+}
+
+async fn response_html(response: axum::response::Response) -> String {
+    String::from_utf8(
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap()
+}
+
+fn between<'a>(input: &'a str, prefix: &str, suffix: &str) -> &'a str {
+    input
+        .split_once(prefix)
+        .unwrap()
+        .1
+        .split_once(suffix)
+        .unwrap()
+        .0
 }

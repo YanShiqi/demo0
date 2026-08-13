@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}商城 · 牢笼{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">SHOP</p>
+  <h1>兑换商城</h1>
+  {% if ctx.authenticated %}
+  <p class="muted">使用 {{ ctx.currency_symbol }} {{ ctx.currency_name }} 兑换商品。每次购买都会生成一枚仅展示一次的兑换码。</p>
+  {% else %}
+  <p class="muted">商品可公开浏览。<a href="/login">登录</a>后即可使用货币兑换。</p>
+  {% endif %}
+</section>
+{% if has_products %}
+<section class="shop-grid" aria-label="可兑换商品">
+  {% for product in products %}
+  <article class="shop-product-card">
+    <img class="shop-product-icon" src="{{ product.icon_url }}" alt="{{ product.name }} 图标">
+    <div class="shop-product-copy">
+      <h2>{{ product.name }}</h2>
+      <p>{{ product.description }}</p>
+      <dl class="shop-product-meta">
+        <div><dt>价格</dt><dd>{{ ctx.currency_symbol }} {{ product.price }} {{ ctx.currency_name }}</dd></div>
+        <div><dt>有效期</dt><dd>{{ product.valid_days_label }}</dd></div>
+        <div><dt>持有上限</dt><dd>{{ product.max_active_per_user }} 枚有效码</dd></div>
+      </dl>
+    </div>
+    {% if ctx.authenticated %}
+    <form action="/shop/products/{{ product.id }}/purchase" method="post" class="shop-purchase-form">
+      <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+      <input type="hidden" name="purchase_key" value="{{ product.purchase_key }}">
+      {% if product.can_purchase %}
+      <button class="button" type="submit">立即兑换</button>
+      {% else %}
+      <button class="button" type="submit" disabled aria-describedby="reason-{{ product.id }}">暂不可兑换</button>
+      <p id="reason-{{ product.id }}" class="form-error">{{ product.disabled_reason }}</p>
+      {% endif %}
+    </form>
+    {% else %}
+    <a class="button secondary" href="/login">登录后兑换</a>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+<nav class="pagination" aria-label="商城商品分页">
+  {% if has_previous_page %}<a class="button secondary" href="/shop?page=1">第一页</a><a class="button secondary" href="/shop?page={{ previous_page }}">上一页</a>{% else %}<span class="button secondary pagination-disabled">第一页</span><span class="button secondary pagination-disabled">上一页</span>{% endif %}
+  <span class="page-indicator">第 {{ current_page }} / {{ total_pages }} 页</span>
+  {% if has_next_page %}<a class="button secondary" href="/shop?page={{ next_page }}">下一页</a><a class="button secondary" href="/shop?page={{ total_pages }}">最后一页</a>{% else %}<span class="button secondary pagination-disabled">下一页</span><span class="button secondary pagination-disabled">最后一页</span>{% endif %}
+</nav>
+{% else %}
+<p class="empty-state">商城暂时没有可兑换商品。</p>
+{% endif %}
+{% endblock %}

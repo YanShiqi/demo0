@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}我的兑换码 · 牢笼{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">VOUCHERS</p>
+  <h1>我的兑换码</h1>
+  <p class="muted">兑换码明文只会在购买成功时显示一次；这里仅保留可识别的掩码。</p>
+  {% if has_already_message %}<p class="form-error">该购买请求已经处理过，请在下方查看兑换码。</p>{% endif %}
+</section>
+{% if has_vouchers %}
+<section class="voucher-list">
+  {% for voucher in vouchers %}
+  <article class="voucher-row">
+    <img class="voucher-icon" src="{{ voucher.icon_url }}" alt="{{ voucher.product_name }} 图标">
+    <div>
+      <h2>{{ voucher.product_name }}</h2>
+      <p>{{ voucher.product_description }}</p>
+      <code>{{ voucher.token_mask }}</code>
+    </div>
+    <div class="voucher-meta"><strong>{{ voucher.status_label }}</strong>{% if voucher.has_expiration %}<span>有效期至 {{ voucher.expires_at }}</span>{% endif %}<time>购买于 {{ voucher.created_at }}</time></div>
+  </article>
+  {% endfor %}
+</section>
+<nav class="pagination" aria-label="兑换码分页">
+  {% if has_previous_page %}<a class="button secondary" href="/vouchers?page=1">第一页</a><a class="button secondary" href="/vouchers?page={{ previous_page }}">上一页</a>{% else %}<span class="button secondary pagination-disabled">第一页</span><span class="button secondary pagination-disabled">上一页</span>{% endif %}
+  <span class="page-indicator">第 {{ current_page }} / {{ total_pages }} 页</span>
+  {% if has_next_page %}<a class="button secondary" href="/vouchers?page={{ next_page }}">下一页</a><a class="button secondary" href="/vouchers?page={{ total_pages }}">最后一页</a>{% else %}<span class="button secondary pagination-disabled">下一页</span><span class="button secondary pagination-disabled">最后一页</span>{% endif %}
+</nav>
+{% else %}
+<p class="empty-state">你还没有兑换码，去<a href="/shop">商城</a>看看吧。</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}兑换码已生成 · 牢笼{% endblock %}
+{% block content %}
+<section class="form-card voucher-reveal-card">
+  <p class="eyebrow">ONE-TIME REVEAL</p>
+  <h1>{{ product_name }}兑换码已生成</h1>
+  <p class="voucher-warning">请立即复制并妥善保存。离开此页面后，兑换码明文不会再次显示。</p>
+  <code class="voucher-token" data-token="{{ plaintext_token }}">{{ plaintext_token }}</code>
+  <button class="button" type="button" data-copy-token data-token="{{ plaintext_token }}">复制兑换码</button>
+  {% if has_expiration %}<p class="muted">有效期至：{{ expires_at }}</p>{% endif %}
+  <p><a href="/vouchers">前往我的兑换码</a></p>
+</section>
+<script>
+const copyButton = document.querySelector("[data-copy-token]");
+copyButton?.addEventListener("click", async () => {
+  const token = copyButton.dataset.token;
+  if (!token) return;
+  await navigator.clipboard.writeText(token);
+  copyButton.textContent = "已复制，请妥善保存";
+});
+</script>
+{% endblock %}

@@ -42,6 +42,16 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
             get(web::messages_page).post(web::create_message),
         )
         .route("/currency", get(web::currency_page))
+        .route("/shop", get(web::shop_page))
+        .route(
+            "/shop/products/{product_id}/purchase",
+            axum::routing::post(web::purchase_product),
+        )
+        .route("/vouchers", get(web::voucher_list))
+        .route(
+            "/static/shop/products/{file_name}",
+            get(web::shop_product_icon),
+        )
         .route(
             "/messages/{id}/delete",
             axum::routing::post(web::delete_message),

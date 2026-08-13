@@ -413,3 +413,68 @@ pub struct AdminUsersTemplate {
     pub has_message: bool,
     pub message: String,
 }
+
+#[derive(Clone, Debug)]
+pub struct ShopProductView {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub icon_url: String,
+    pub price: i64,
+    pub valid_days_label: String,
+    pub max_active_per_user: i64,
+    pub purchase_key: String,
+    pub can_purchase: bool,
+    pub disabled_reason: String,
+}
+
+#[derive(Template)]
+#[template(path = "shop.html")]
+pub struct ShopTemplate {
+    pub ctx: PageContext,
+    pub products: Vec<ShopProductView>,
+    pub has_products: bool,
+    pub current_page: i64,
+    pub total_pages: i64,
+    pub previous_page: i64,
+    pub has_previous_page: bool,
+    pub next_page: i64,
+    pub has_next_page: bool,
+}
+
+#[derive(Template)]
+#[template(path = "voucher_reveal.html")]
+pub struct VoucherRevealTemplate {
+    pub ctx: PageContext,
+    pub product_name: String,
+    pub plaintext_token: String,
+    pub expires_at: String,
+    pub has_expiration: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct VoucherView {
+    pub product_name: String,
+    pub product_description: String,
+    pub icon_url: String,
+    pub token_mask: String,
+    pub status_label: &'static str,
+    pub expires_at: String,
+    pub has_expiration: bool,
+    pub created_at: String,
+}
+
+#[derive(Template)]
+#[template(path = "vouchers.html")]
+pub struct VouchersTemplate {
+    pub ctx: PageContext,
+    pub vouchers: Vec<VoucherView>,
+    pub has_vouchers: bool,
+    pub has_already_message: bool,
+    pub current_page: i64,
+    pub total_pages: i64,
+    pub previous_page: i64,
+    pub has_previous_page: bool,
+    pub next_page: i64,
+    pub has_next_page: bool,
+}
