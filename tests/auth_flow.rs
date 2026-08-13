@@ -1694,10 +1694,11 @@ async fn users_can_publish_anonymous_public_messages_without_bypassing_identity_
 
     let author_html = response_html(
         router
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/messages")
-                    .header(header::COOKIE, author_cookie)
+                    .header(header::COOKIE, &author_cookie)
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1705,9 +1706,42 @@ async fn users_can_publish_anonymous_public_messages_without_bypassing_identity_
             .unwrap(),
     )
     .await;
-    assert!(author_html.contains("anonymous_message_author"));
-    assert!(author_html.contains("匿名留言作者"));
+    assert!(author_html.contains("匿名用户"));
+    assert!(!author_html.contains("href=\"/u/anonymous_message_author\""));
     assert!(author_html.contains(&format!("/messages/{message_id}/delete")));
+
+    let author_home_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, author_cookie.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(author_home_html.contains("匿名用户"));
+    assert!(!author_home_html.contains("href=\"/u/anonymous_message_author\""));
+
+    let viewer_home_html = response_html(
+        router
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, viewer_cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(viewer_home_html.contains("匿名用户"));
+    assert!(!viewer_home_html.contains("anonymous_message_author"));
 }
 
 #[tokio::test]

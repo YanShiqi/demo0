@@ -1888,11 +1888,8 @@ fn message_view(
         user.id == message.author_user_id
             || matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin)
     });
-    let show_identity = !message.is_anonymous
-        || current_user.is_some_and(|user| {
-            user.id == message.author_user_id
-                || matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin)
-        });
+    // 匿名留言在所有前台页面都隐藏身份；current_user 仍用于判断作者删除权限。
+    let show_identity = !message.is_anonymous;
     MessageView {
         id: message.id,
         author_user_id: message.author_user_id,
@@ -1908,6 +1905,7 @@ fn message_view(
 
 fn home_message_view(message: PublicMessageRow, utc_offset_hours: i8) -> MessageView {
     let role = Role::from_str(&message.role).unwrap_or(Role::User);
+    let show_identity = !message.is_anonymous;
     MessageView {
         id: message.id,
         author_user_id: message.author_user_id,
@@ -1917,7 +1915,7 @@ fn home_message_view(message: PublicMessageRow, utc_offset_hours: i8) -> Message
         body: message.body,
         created_at: time_display::friendly_rfc3339(&message.created_at, utc_offset_hours),
         can_delete: false,
-        show_identity: !message.is_anonymous,
+        show_identity,
     }
 }
 
