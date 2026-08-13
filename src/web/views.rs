@@ -478,3 +478,25 @@ pub struct VouchersTemplate {
     pub next_page: i64,
     pub has_next_page: bool,
 }
+
+#[derive(Clone, Debug)]
+pub struct AdminVoucherView {
+    pub id: String,
+    pub product_name: String,
+    pub product_description: String,
+    pub token_mask: String,
+    pub status_label: &'static str,
+    pub expires_at: String,
+    pub has_expiration: bool,
+    pub buyer_nickname: String,
+    pub buyer_username: String,
+}
+
+#[derive(Template)]
+#[template(path = "admin_vouchers.html")]
+pub struct AdminVouchersTemplate {
+    pub ctx: PageContext,
+    pub result: Option<AdminVoucherView>,
+    pub has_not_found: bool,
+    pub note_max_length: usize,
+}

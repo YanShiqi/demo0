@@ -1359,6 +1359,11 @@ button.danger {
     color: var(--muted);
 }
 
+/* 兑换码管理结果沿用凭证卡片布局，窄屏时由现有网格规则折叠。 */
+.voucher-admin-result > p {
+    margin: 18px 0;
+}
+
 footer {
     padding: 30px;
     color: var(--muted);

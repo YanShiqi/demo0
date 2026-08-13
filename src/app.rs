@@ -1,16 +1,22 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{Router, extract::DefaultBodyLimit, middleware, routing::get};
 use sqlx::SqlitePool;
 use tower_http::trace::TraceLayer;
 
-use crate::{avatar::MAX_UPLOAD_BYTES, config::Config, rate_limit::LoginLimiter, web};
+use crate::{
+    avatar::MAX_UPLOAD_BYTES,
+    config::Config,
+    rate_limit::{AttemptLimiter, LoginLimiter},
+    web,
+};
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
     pub config: Arc<Config>,
     pub login_limiter: LoginLimiter,
+    pub voucher_lookup_limiter: AttemptLimiter,
 }
 
 pub fn build(pool: SqlitePool, config: Config) -> Router {
@@ -20,10 +26,15 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         .max(MAX_UPLOAD_BYTES)
         .max(config.novels.chapter_max_upload_bytes)
         + 128 * 1024;
+    let voucher_lookup_limiter = AttemptLimiter::new(
+        Duration::from_secs(config.shop.token_lookup_window_seconds),
+        config.shop.token_lookup_max_attempts,
+    );
     let state = AppState {
         pool,
         config: Arc::new(config),
         login_limiter: LoginLimiter::default(),
+        voucher_lookup_limiter,
     };
 
     Router::new()
@@ -48,6 +59,19 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
             axum::routing::post(web::purchase_product),
         )
         .route("/vouchers", get(web::voucher_list))
+        .route("/admin/vouchers", get(web::admin_vouchers))
+        .route(
+            "/admin/vouchers/lookup",
+            axum::routing::post(web::lookup_voucher),
+        )
+        .route(
+            "/admin/vouchers/{id}/redeem",
+            axum::routing::post(web::redeem_voucher),
+        )
+        .route(
+            "/admin/vouchers/{id}/cancel",
+            axum::routing::post(web::cancel_voucher),
+        )
         .route(
             "/static/shop/products/{file_name}",
             get(web::shop_product_icon),

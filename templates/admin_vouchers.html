@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}兑换码管理 · 牢笼{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">ADMIN · VOUCHERS</p>
+  <h1>兑换码管理</h1>
+  <p class="muted">查询只用于定位凭证；兑换码明文不会在结果或后续操作中出现。</p>
+</section>
+<section class="form-card wide">
+  <form class="compact-form" action="/admin/vouchers/lookup" method="post">
+    <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+    <label for="voucher-token">Token<input id="voucher-token" name="token" autocomplete="off" spellcheck="false" required></label>
+    <button class="button" type="submit">查询</button>
+  </form>
+</section>
+{% if has_not_found %}<p class="empty-state">未找到对应兑换码。</p>{% endif %}
+{% match result %}
+{% when Some with (voucher) %}
+<section class="form-card wide voucher-admin-result">
+  <div class="voucher-row">
+    <div><h2>{{ voucher.product_name }}</h2><p>{{ voucher.product_description }}</p><code>{{ voucher.token_mask }}</code></div>
+    <div class="voucher-meta"><strong>{{ voucher.status_label }}</strong>{% if voucher.has_expiration %}<span>有效期至 {{ voucher.expires_at }}</span>{% endif %}</div>
+  </div>
+  <p>原购买者：{{ voucher.buyer_nickname }} @{{ voucher.buyer_username }}（不代表当前持有人）</p>
+  {% if voucher.status_label == "有效" %}
+  <div class="settings-grid">
+    <form class="compact-form" action="/admin/vouchers/{{ voucher.id }}/redeem" method="post">
+      <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+      <label>兑换备注<input name="note" maxlength="{{ note_max_length }}" required></label>
+      <button class="button" type="submit">确认兑换</button>
+    </form>
+    <form class="compact-form" action="/admin/vouchers/{{ voucher.id }}/cancel" method="post">
+      <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+      <label>取消原因<input name="reason" maxlength="{{ note_max_length }}" required></label>
+      <button class="button danger" type="submit">取消兑换码</button>
+    </form>
+  </div>
+  {% endif %}
+</section>
+{% when None %}{% endmatch %}
+{% endblock %}

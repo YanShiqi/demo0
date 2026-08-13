@@ -2,7 +2,7 @@ use axum::{
     Form,
     extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
-    response::Response,
+    response::{IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -18,7 +18,10 @@ use crate::{
 
 use super::{
     binary_response, page_context, page_context_for_user, redirect, render, require_user,
-    views::{ShopProductView, ShopTemplate, VoucherRevealTemplate, VoucherView, VouchersTemplate},
+    views::{
+        AdminVoucherView, AdminVouchersTemplate, ShopProductView, ShopTemplate,
+        VoucherRevealTemplate, VoucherView, VouchersTemplate,
+    },
 };
 
 #[derive(Deserialize)]
@@ -36,6 +39,114 @@ pub struct VoucherQuery {
 #[derive(Deserialize, Default)]
 pub struct ShopQuery {
     page: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct VoucherLookupForm {
+    csrf_token: String,
+    token: String,
+}
+
+#[derive(Deserialize)]
+pub struct VoucherRedeemForm {
+    csrf_token: String,
+    note: String,
+}
+
+#[derive(Deserialize)]
+pub struct VoucherCancelForm {
+    csrf_token: String,
+    reason: String,
+}
+
+/// 超级管理员兑换码管理页；页面不接受或保留明文兑换码。
+pub async fn admin_vouchers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let actor = super::require_super_admin(&state, &session).await?;
+    render_admin_vouchers(&state, &session.csrf_token, &actor, None, false).await
+}
+
+/// 使用一次性查询字段定位凭证，随后仅通过凭证 ID 操作。
+pub async fn lookup_voucher(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<VoucherLookupForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let actor = super::require_super_admin(&state, &session).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    if !state
+        .voucher_lookup_limiter
+        .check_and_record(&actor.id)
+        .await
+    {
+        return Err(AppError::TooManyRequests(
+            "Token 查询过于频繁，请稍后再试".to_owned(),
+        ));
+    }
+    let voucher =
+        shop::lookup_by_token(&state.pool, &form.token, OffsetDateTime::now_utc()).await?;
+    let result = match voucher {
+        Some(voucher) => {
+            let buyer = auth::find_user_by_id(&state.pool, &voucher.order.user_id)
+                .await?
+                .ok_or(AppError::NotFound)?;
+            Some(admin_voucher_view(
+                voucher,
+                buyer.nickname,
+                buyer.username,
+                OffsetDateTime::now_utc(),
+                state.config.display.utc_offset_hours,
+            ))
+        }
+        None => None,
+    };
+    render_admin_vouchers(&state, &session.csrf_token, &actor, result, true).await
+}
+
+pub async fn redeem_voucher(
+    State(state): State<AppState>,
+    Path(voucher_id): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<VoucherRedeemForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let actor = super::require_super_admin(&state, &session).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    shop::redeem_voucher(
+        &state.pool,
+        &voucher_id,
+        &actor,
+        &form.note,
+        state.config.shop.admin_note_max_length,
+        OffsetDateTime::now_utc(),
+    )
+    .await?;
+    Ok(Redirect::to("/admin/vouchers").into_response())
+}
+
+pub async fn cancel_voucher(
+    State(state): State<AppState>,
+    Path(voucher_id): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<VoucherCancelForm>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let actor = super::require_super_admin(&state, &session).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    shop::cancel_voucher(
+        &state.pool,
+        &voucher_id,
+        &actor,
+        &form.reason,
+        state.config.shop.admin_note_max_length,
+        OffsetDateTime::now_utc(),
+    )
+    .await?;
+    Ok(Redirect::to("/admin/vouchers").into_response())
 }
 
 /// 展示可购买商品；未登录访客可以浏览，但不能提交购买。
@@ -281,6 +392,56 @@ fn voucher_status_label(status: store::EffectiveVoucherStatus) -> &'static str {
         store::EffectiveVoucherStatus::Cancelled => "已取消",
         store::EffectiveVoucherStatus::Expired => "已过期",
     }
+}
+
+fn admin_voucher_view(
+    voucher: store::VoucherWithOrder,
+    buyer_nickname: String,
+    buyer_username: String,
+    now: OffsetDateTime,
+    utc_offset_hours: i8,
+) -> AdminVoucherView {
+    let status_label = voucher_status_label(voucher.effective_status(now));
+    AdminVoucherView {
+        id: voucher.voucher.id,
+        product_name: voucher.order.product_name,
+        product_description: voucher.order.product_description,
+        token_mask: voucher.voucher.token_mask,
+        status_label,
+        has_expiration: voucher.voucher.expires_at.is_some(),
+        expires_at: voucher
+            .voucher
+            .expires_at
+            .as_deref()
+            .map(|value| time_display::friendly_rfc3339(value, utc_offset_hours))
+            .unwrap_or_default(),
+        buyer_nickname,
+        buyer_username,
+    }
+}
+
+async fn render_admin_vouchers(
+    state: &AppState,
+    csrf_token: &str,
+    actor: &crate::model::User,
+    result: Option<AdminVoucherView>,
+    lookup_performed: bool,
+) -> Result<Response, AppError> {
+    let has_result = result.is_some();
+    let mut response = render(
+        AdminVouchersTemplate {
+            ctx: page_context_for_user(state, csrf_token.to_owned(), actor).await?,
+            result,
+            has_not_found: lookup_performed && !has_result,
+            note_max_length: state.config.shop.admin_note_max_length,
+        },
+        StatusCode::OK,
+        None,
+    )?;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 fn now_string() -> Result<String, AppError> {

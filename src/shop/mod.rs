@@ -10,8 +10,99 @@ use crate::{
     config::CurrencyConfig,
     currency::{self, CurrencyReason},
     error::AppError,
-    model::User,
+    model::{Role, User},
 };
+
+/// 以规范化散列查找凭证，整个过程中不保留或记录兑换码明文。
+pub async fn lookup_by_token(
+    pool: &SqlitePool,
+    raw_token: &str,
+    _now: OffsetDateTime,
+) -> Result<Option<store::VoucherWithOrder>, AppError> {
+    let normalized = token::normalize(raw_token)?;
+    store::find_voucher_by_hash(pool, &token::hash_normalized(&normalized)).await
+}
+
+/// 将有效凭证兑换一次，并在同一事务写入操作者审计记录。
+pub async fn redeem_voucher(
+    pool: &SqlitePool,
+    voucher_id: &str,
+    actor: &User,
+    note: &str,
+    note_max_length: usize,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    transition_voucher(pool, voucher_id, actor, note, note_max_length, now, true).await
+}
+
+/// 取消仍有效的凭证，并在同一事务写入操作者审计记录。
+pub async fn cancel_voucher(
+    pool: &SqlitePool,
+    voucher_id: &str,
+    actor: &User,
+    reason: &str,
+    note_max_length: usize,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    transition_voucher(pool, voucher_id, actor, reason, note_max_length, now, false).await
+}
+
+async fn transition_voucher(
+    pool: &SqlitePool,
+    voucher_id: &str,
+    actor: &User,
+    supplied_note: &str,
+    note_max_length: usize,
+    now: OffsetDateTime,
+    redeem: bool,
+) -> Result<(), AppError> {
+    if actor.parsed_role() != Role::SuperAdmin {
+        return Err(AppError::Forbidden);
+    }
+    let note = validate_admin_note(supplied_note, note_max_length)?;
+    let now_string = format_utc(now)?;
+    let mut transaction = pool.begin().await?;
+    let voucher = store::find_voucher_with_order_by_id_in_transaction(&mut transaction, voucher_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if voucher.effective_status(now) != store::EffectiveVoucherStatus::Active {
+        return Err(AppError::BadRequest("兑换码当前不可流转".to_owned()));
+    }
+    let changed = if redeem {
+        store::redeem_active_voucher(&mut transaction, voucher_id, &actor.id, note, &now_string)
+            .await?
+    } else {
+        store::cancel_active_voucher(&mut transaction, voucher_id, &actor.id, note, &now_string)
+            .await?
+    };
+    if !changed {
+        return Err(AppError::BadRequest("兑换码当前不可流转".to_owned()));
+    }
+    store::insert_audit(
+        &mut transaction,
+        voucher_id,
+        if redeem { "redeemed" } else { "cancelled" },
+        Some(&actor.id),
+        note,
+        &now_string,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+fn validate_admin_note(note: &str, max_length: usize) -> Result<&str, AppError> {
+    use unicode_segmentation::UnicodeSegmentation;
+
+    let trimmed = note.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::BadRequest("操作备注不能为空".to_owned()));
+    }
+    if trimmed.graphemes(true).count() > max_length {
+        return Err(AppError::BadRequest("操作备注过长".to_owned()));
+    }
+    Ok(trimmed)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PurchasedVoucher {

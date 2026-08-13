@@ -40,7 +40,10 @@ use views::{
     RecentCurrencyLogView, RegisterTemplate, UpdateView, UpdatesTemplate,
 };
 
-pub use shop::{purchase_product, shop_page, shop_product_icon, voucher_list};
+pub use shop::{
+    admin_vouchers, cancel_voucher, lookup_voucher, purchase_product, redeem_voucher, shop_page,
+    shop_product_icon, voucher_list,
+};
 
 #[derive(Deserialize)]
 pub struct RegisterForm {

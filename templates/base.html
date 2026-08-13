@@ -31,6 +31,7 @@
               <a href="/admin/memes" role="menuitem">Meme 审核{% if ctx.has_pending_memes %} <span class="menu-count">{{ ctx.pending_meme_count }}</span>{% endif %}</a>
               <a href="/admin/currency" role="menuitem">货币管理</a>
               {% if ctx.is_super_admin %}
+                <a href="/admin/vouchers" role="menuitem">兑换码管理</a>
                 <a href="/admin/users" role="menuitem">用户管理</a>
                 <a href="/admin/novels" role="menuitem">小说管理</a>
               {% endif %}

@@ -387,6 +387,66 @@ pub async fn find_voucher_with_order_by_id(
     find_voucher_with_order(pool, "redemption_vouchers.id = ?", voucher_id).await
 }
 
+/// 在状态流转事务中读取凭证和订单快照，避免读写落在不同事务。
+pub async fn find_voucher_with_order_by_id_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    voucher_id: &str,
+) -> Result<Option<VoucherWithOrder>, AppError> {
+    Ok(sqlx::query_as::<_, VoucherWithOrderRow>(
+        "SELECT redemption_vouchers.id AS voucher_id, redemption_vouchers.order_id AS voucher_order_id, redemption_vouchers.token_hash, redemption_vouchers.token_mask, redemption_vouchers.status, redemption_vouchers.expires_at, redemption_vouchers.redeemed_at, redemption_vouchers.redeemed_by_user_id, redemption_vouchers.redemption_note, redemption_vouchers.cancelled_at, redemption_vouchers.cancelled_by_user_id, redemption_vouchers.cancellation_reason, redemption_vouchers.created_at AS voucher_created_at, shop_orders.id AS order_id, shop_orders.user_id, shop_orders.product_id, shop_orders.product_name, shop_orders.product_description, shop_orders.icon_file, shop_orders.fulfillment_type, shop_orders.price_paid, shop_orders.valid_days, shop_orders.purchase_key, shop_orders.created_at AS order_created_at FROM redemption_vouchers JOIN shop_orders ON shop_orders.id = redemption_vouchers.order_id WHERE redemption_vouchers.id = ?",
+    )
+    .bind(voucher_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .map(Into::into))
+}
+
+/// 仅在仍有效的 active 状态下完成兑换，受影响行数是并发竞争的最终裁决。
+pub async fn redeem_active_voucher(
+    transaction: &mut Transaction<'_, Sqlite>,
+    voucher_id: &str,
+    actor_user_id: &str,
+    note: &str,
+    now: &str,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE redemption_vouchers SET status = ?, redeemed_at = ?, redeemed_by_user_id = ?, redemption_note = ? WHERE id = ? AND status = ? AND (expires_at IS NULL OR expires_at > ?)",
+    )
+    .bind(STATUS_REDEEMED)
+    .bind(now)
+    .bind(actor_user_id)
+    .bind(note)
+    .bind(voucher_id)
+    .bind(STATUS_ACTIVE)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 取消与兑换使用同一有效期条件，过期凭证不会被改写为已取消。
+pub async fn cancel_active_voucher(
+    transaction: &mut Transaction<'_, Sqlite>,
+    voucher_id: &str,
+    actor_user_id: &str,
+    reason: &str,
+    now: &str,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE redemption_vouchers SET status = ?, cancelled_at = ?, cancelled_by_user_id = ?, cancellation_reason = ? WHERE id = ? AND status = ? AND (expires_at IS NULL OR expires_at > ?)",
+    )
+    .bind(STATUS_CANCELLED)
+    .bind(now)
+    .bind(actor_user_id)
+    .bind(reason)
+    .bind(voucher_id)
+    .bind(STATUS_ACTIVE)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 async fn find_voucher_with_order(
     pool: &SqlitePool,
     condition: &str,

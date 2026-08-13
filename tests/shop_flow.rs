@@ -774,6 +774,213 @@ async fn player_vouchers_are_paginated_and_isolated_by_user() {
     assert!(!admin_page.contains("礼品卡兑换码"));
 }
 
+#[tokio::test]
+async fn admin_voucher_routes_require_super_admin() {
+    let fixture = ShopFixture::new().await;
+    let admin_cookie = fixture.sign_in_user(&fixture.admin.username).await;
+
+    assert_eq!(
+        fixture
+            .get("/admin/vouchers", Some(&admin_cookie))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        fixture
+            .post(
+                "/admin/vouchers/lookup",
+                Some(&admin_cookie),
+                "csrf_token=unused&token=ZV1-0000-0000-0000-0000-0000-0000-0000-0000",
+            )
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn admin_voucher_lookup_normalizes_token_without_changing_status_or_echoing_it() {
+    let fixture = ShopFixture::new().await;
+    fixture.grant_buyer_currency(50).await;
+    let (buyer_cookie, buyer_csrf) = fixture.sign_in_buyer().await;
+    let purchase = fixture
+        .purchase(
+            &buyer_cookie,
+            &buyer_csrf,
+            "milk_tea",
+            &ulid::Ulid::new().to_string(),
+        )
+        .await;
+    let token = between(&response_html(purchase).await, "data-token=\"", "\"").to_owned();
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let csrf = fixture.admin_voucher_csrf(&super_cookie).await;
+    let submitted = token.to_lowercase().replace('-', " ");
+
+    let response = fixture
+        .post(
+            "/admin/vouchers/lookup",
+            Some(&super_cookie),
+            &format!("csrf_token={csrf}&token={}", submitted.replace(' ', "+")),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    let html = response_html(response).await;
+    assert!(html.contains("奶茶兑换码"));
+    assert!(html.contains("原购买者：商城买家 @shop_buyer（不代表当前持有人）"));
+    assert!(!html.contains(&token));
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM redemption_vouchers WHERE token_hash = ?",
+        )
+        .bind(shop::token::hash_normalized(
+            &shop::token::normalize(&token).unwrap()
+        ))
+        .fetch_one(&fixture.pool)
+        .await
+        .unwrap(),
+        store::STATUS_ACTIVE
+    );
+}
+
+#[tokio::test]
+async fn admin_voucher_redeem_requires_bounded_note_and_only_succeeds_once() {
+    let fixture = ShopFixture::new().await;
+    let voucher_id = fixture.create_admin_voucher(None).await;
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let csrf = fixture.admin_voucher_csrf(&super_cookie).await;
+
+    for note in ["", &"x".repeat(201)] {
+        let response = fixture
+            .post(
+                &format!("/admin/vouchers/{voucher_id}/redeem"),
+                Some(&super_cookie),
+                &format!("csrf_token={csrf}&note={note}"),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    let redeemed = fixture
+        .post(
+            &format!("/admin/vouchers/{voucher_id}/redeem"),
+            Some(&super_cookie),
+            &format!("csrf_token={csrf}&note=已向顾客兑换"),
+        )
+        .await;
+    assert_eq!(redeemed.status(), StatusCode::SEE_OTHER);
+    let repeated = fixture
+        .post(
+            &format!("/admin/vouchers/{voucher_id}/redeem"),
+            Some(&super_cookie),
+            &format!("csrf_token={csrf}&note=再次尝试"),
+        )
+        .await;
+    assert_eq!(repeated.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        voucher_status(&fixture.pool, &voucher_id).await,
+        store::STATUS_REDEEMED
+    );
+    assert_eq!(
+        audit_actor_and_note(&fixture.pool, &voucher_id, "redeemed").await,
+        (fixture.super_admin.id.clone(), "已向顾客兑换".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn admin_voucher_cancel_succeeds_once_and_expired_or_final_vouchers_reject_transitions() {
+    let fixture = ShopFixture::new().await;
+    let cancellable_id = fixture.create_admin_voucher(None).await;
+    let expired_id = fixture.create_admin_voucher(Some(CREATED_AT)).await;
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let csrf = fixture.admin_voucher_csrf(&super_cookie).await;
+
+    let cancelled = fixture
+        .post(
+            &format!("/admin/vouchers/{cancellable_id}/cancel"),
+            Some(&super_cookie),
+            &format!("csrf_token={csrf}&reason=客户退款"),
+        )
+        .await;
+    assert_eq!(cancelled.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        voucher_status(&fixture.pool, &cancellable_id).await,
+        store::STATUS_CANCELLED
+    );
+    assert_eq!(
+        audit_actor_and_note(&fixture.pool, &cancellable_id, "cancelled").await,
+        (fixture.super_admin.id.clone(), "客户退款".to_owned())
+    );
+
+    for (path, note) in [
+        (
+            format!("/admin/vouchers/{cancellable_id}/cancel"),
+            "重复取消",
+        ),
+        (
+            format!("/admin/vouchers/{cancellable_id}/redeem"),
+            "已取消不可兑换",
+        ),
+        (
+            format!("/admin/vouchers/{expired_id}/redeem"),
+            "已过期不可兑换",
+        ),
+        (
+            format!("/admin/vouchers/{expired_id}/cancel"),
+            "已过期不可取消",
+        ),
+    ] {
+        let field = if path.ends_with("/cancel") {
+            "reason"
+        } else {
+            "note"
+        };
+        let response = fixture
+            .post(
+                &path,
+                Some(&super_cookie),
+                &format!("csrf_token={csrf}&{field}={note}"),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(
+        voucher_status(&fixture.pool, &expired_id).await,
+        store::STATUS_ACTIVE
+    );
+}
+
+#[tokio::test]
+async fn admin_voucher_lookup_is_rate_limited_without_echoing_submitted_token() {
+    let fixture = ShopFixture::new_with_lookup_limit(2).await;
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let csrf = fixture.admin_voucher_csrf(&super_cookie).await;
+    let supplied_token = "ZV1-0000-0000-0000-0000-0000-0000-0000-0000";
+
+    for _ in 0..2 {
+        let response = fixture
+            .post(
+                "/admin/vouchers/lookup",
+                Some(&super_cookie),
+                &format!("csrf_token={csrf}&token={supplied_token}"),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let limited = fixture
+        .post(
+            "/admin/vouchers/lookup",
+            Some(&super_cookie),
+            &format!("csrf_token={csrf}&token={supplied_token}"),
+        )
+        .await;
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = response_html(limited).await;
+    assert!(body.contains("Token 查询过于频繁，请稍后再试"));
+    assert!(!body.contains(supplied_token));
+}
+
 #[allow(dead_code)]
 struct ShopFixture {
     temporary: TempDir,
@@ -786,10 +993,18 @@ struct ShopFixture {
 
 impl ShopFixture {
     async fn new() -> Self {
-        Self::new_with_shop_enabled(true).await
+        Self::new_with_settings(true, 20).await
     }
 
     async fn new_with_shop_enabled(shop_enabled: bool) -> Self {
+        Self::new_with_settings(shop_enabled, 20).await
+    }
+
+    async fn new_with_lookup_limit(max_attempts: usize) -> Self {
+        Self::new_with_settings(true, max_attempts).await
+    }
+
+    async fn new_with_settings(shop_enabled: bool, token_lookup_max_attempts: usize) -> Self {
         let temporary = tempfile::tempdir().unwrap();
         let database_url = sqlite_url(&temporary.path().join("shop-flow.db"));
         let pool = demo0::db::connect(&database_url).await.unwrap();
@@ -800,6 +1015,7 @@ impl ShopFixture {
         config.shop.page_size = 2;
         config.shop.voucher_page_size = 2;
         config.shop.enabled = shop_enabled;
+        config.shop.token_lookup_max_attempts = token_lookup_max_attempts;
         config.shop.products = vec![
             ShopProduct {
                 id: "milk_tea".to_owned(),
@@ -902,6 +1118,28 @@ impl ShopFixture {
         )
     }
 
+    async fn admin_voucher_csrf(&self, cookie: &str) -> String {
+        let html = self.get_html("/admin/vouchers", cookie).await;
+        between(&html, "name=\"csrf_token\" value=\"", "\"").to_owned()
+    }
+
+    async fn create_admin_voucher(&self, expires_at: Option<&str>) -> String {
+        let order_id = ulid::Ulid::new().to_string();
+        let voucher_id = ulid::Ulid::new().to_string();
+        let issued = shop::token::issue().unwrap();
+        insert_test_voucher(
+            &self.pool,
+            &self.buyer.id,
+            &order_id,
+            &voucher_id,
+            &issued.hash,
+            "admin-voucher",
+            expires_at,
+        )
+        .await;
+        voucher_id
+    }
+
     async fn sign_in_user(&self, username: &str) -> String {
         let session = self.get("/login", None).await;
         let cookie = response_cookie(&session);
@@ -991,6 +1229,29 @@ impl ShopFixture {
             .await
             .unwrap()
     }
+}
+
+async fn voucher_status(pool: &sqlx::SqlitePool, voucher_id: &str) -> String {
+    sqlx::query_scalar("SELECT status FROM redemption_vouchers WHERE id = ?")
+        .bind(voucher_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn audit_actor_and_note(
+    pool: &sqlx::SqlitePool,
+    voucher_id: &str,
+    event_type: &str,
+) -> (String, String) {
+    sqlx::query_as(
+        "SELECT actor_user_id, note FROM voucher_audit_logs WHERE voucher_id = ? AND event_type = ?",
+    )
+    .bind(voucher_id)
+    .bind(event_type)
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }
 
 fn create_shop_icon(icon_dir: &Path, name: &str) {
