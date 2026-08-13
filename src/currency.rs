@@ -10,6 +10,7 @@ use crate::{
 pub const REASON_ADMIN_GRANT: &str = "admin_grant";
 pub const REASON_ADMIN_DEDUCT: &str = "admin_deduct";
 pub const REASON_SPEND: &str = "spend";
+pub const REASON_SHOP_PURCHASE: &str = "shop_purchase";
 pub const REASON_MEME_APPROVAL_REWARD: &str = "meme_approval_reward";
 pub const REASON_WEEKLY_CHECK_IN: &str = "weekly_check_in";
 
@@ -18,6 +19,7 @@ pub enum CurrencyReason {
     AdminGrant,
     AdminDeduct,
     Spend,
+    ShopPurchase,
     MemeApprovalReward,
     WeeklyCheckIn,
 }
@@ -28,6 +30,7 @@ impl CurrencyReason {
             Self::AdminGrant => REASON_ADMIN_GRANT,
             Self::AdminDeduct => REASON_ADMIN_DEDUCT,
             Self::Spend => REASON_SPEND,
+            Self::ShopPurchase => REASON_SHOP_PURCHASE,
             Self::MemeApprovalReward => REASON_MEME_APPROVAL_REWARD,
             Self::WeeklyCheckIn => REASON_WEEKLY_CHECK_IN,
         }
@@ -156,7 +159,7 @@ pub async fn spend_currency(
     if idempotency_key.trim().is_empty() {
         return Err(AppError::BadRequest("消费幂等键不能为空".to_owned()));
     }
-    if reason != CurrencyReason::Spend {
+    if !matches!(reason, CurrencyReason::Spend | CurrencyReason::ShopPurchase) {
         return Err(AppError::BadRequest("消费原因无效".to_owned()));
     }
 

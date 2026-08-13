@@ -7,7 +7,7 @@ use demo0::{
         NovelConfig, ShopConfig, UpdateConfig,
     },
     model::Role,
-    shop::store,
+    shop::{self, catalog::ShopProduct, store},
     updates::UpdateEntry,
 };
 use tempfile::TempDir;
@@ -205,6 +205,215 @@ async fn store_effective_status_expires_at_the_bound_timestamp() {
     );
 }
 
+#[tokio::test]
+async fn purchase_creates_snapshot_debits_balance_and_keeps_plaintext_out_of_database() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database_url = sqlite_url(&temporary.path().join("purchase-created.db"));
+    let pool = demo0::db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let buyer = create_buyer_with_balance(&pool, "purchase_created", 100).await;
+    let product = test_product("snapshot-token", 25, Some(7), 2);
+    let purchase_key = "01K2H7V9W4RRDMC0P9A8C5P001";
+    let now = timestamp(CREATED_AT);
+
+    let outcome = shop::purchase(&pool, &buyer, &product, purchase_key, &config.currency, now)
+        .await
+        .unwrap();
+    let shop::PurchaseOutcome::Created(created) = outcome else {
+        panic!("expected a newly created purchase");
+    };
+
+    assert!(created.plaintext_token.starts_with("ZV1-"));
+    assert_eq!(created.expires_at.as_deref(), Some("2026-08-20T12:00:00Z"));
+    assert_eq!(user_balance(&pool, &buyer.id).await, 75);
+    let order = store::find_order_by_purchase_key(&pool, purchase_key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order.product_name, product.name);
+    assert_eq!(order.product_description, product.description);
+    assert_eq!(order.price_paid, product.price);
+    let related_id =
+        sqlx::query_scalar::<_, String>("SELECT related_id FROM currency_logs WHERE user_id = ?")
+            .bind(&buyer.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(related_id, created.order_id);
+    let leaked = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM shop_orders o
+         JOIN redemption_vouchers v ON v.order_id = o.id
+         JOIN voucher_audit_logs a ON a.voucher_id = v.id
+         WHERE o.product_name = ? OR o.product_description = ? OR v.token_mask = ? OR a.note = ?",
+    )
+    .bind(&created.plaintext_token)
+    .bind(&created.plaintext_token)
+    .bind(&created.plaintext_token)
+    .bind(&created.plaintext_token)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(leaked, 0);
+}
+
+#[tokio::test]
+async fn purchase_returns_already_processed_for_duplicate_key_without_second_debit_or_token() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database_url = sqlite_url(&temporary.path().join("purchase-idempotent.db"));
+    let pool = demo0::db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let buyer = create_buyer_with_balance(&pool, "purchase_idempotent", 100).await;
+    let product = test_product("idempotent-token", 25, None, 2);
+    let purchase_key = "01K2H7V9W4RRDMC0P9A8C5P002";
+
+    let first = shop::purchase(
+        &pool,
+        &buyer,
+        &product,
+        purchase_key,
+        &config.currency,
+        timestamp(CREATED_AT),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(first, shop::PurchaseOutcome::Created(_)));
+    let second = shop::purchase(
+        &pool,
+        &buyer,
+        &product,
+        purchase_key,
+        &config.currency,
+        timestamp(CREATED_AT),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(second, shop::PurchaseOutcome::AlreadyProcessed);
+    assert_eq!(user_balance(&pool, &buyer.id).await, 75);
+    assert_eq!(table_count(&pool, "shop_orders").await, 1);
+    assert_eq!(table_count(&pool, "redemption_vouchers").await, 1);
+    assert_eq!(table_count(&pool, "currency_logs").await, 1);
+}
+
+#[tokio::test]
+async fn purchase_rejects_active_limit_but_excludes_expired_vouchers() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database_url = sqlite_url(&temporary.path().join("purchase-limit.db"));
+    let pool = demo0::db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let buyer = create_buyer_with_balance(&pool, "purchase_limit", 100).await;
+    let product = test_product("limited-token", 25, Some(1), 1);
+    let now = timestamp(CREATED_AT);
+
+    let first = shop::purchase(
+        &pool,
+        &buyer,
+        &product,
+        "01K2H7V9W4RRDMC0P9A8C5P003",
+        &config.currency,
+        now,
+    )
+    .await
+    .unwrap();
+    let shop::PurchaseOutcome::Created(first) = first else {
+        panic!("expected first purchase to create a voucher");
+    };
+    let limited = shop::purchase(
+        &pool,
+        &buyer,
+        &product,
+        "01K2H7V9W4RRDMC0P9A8C5P004",
+        &config.currency,
+        now,
+    )
+    .await
+    .unwrap_err();
+    assert!(limited.to_string().contains("持有数量"));
+    assert_eq!(user_balance(&pool, &buyer.id).await, 75);
+
+    sqlx::query("UPDATE redemption_vouchers SET expires_at = ? WHERE id = ?")
+        .bind(CREATED_AT)
+        .bind(&first.voucher_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let after_expiry = shop::purchase(
+        &pool,
+        &buyer,
+        &product,
+        "01K2H7V9W4RRDMC0P9A8C5P005",
+        &config.currency,
+        now,
+    )
+    .await;
+
+    assert!(matches!(
+        after_expiry,
+        Ok(shop::PurchaseOutcome::Created(_))
+    ));
+    assert_eq!(user_balance(&pool, &buyer.id).await, 50);
+}
+
+#[tokio::test]
+async fn purchase_rejects_insufficient_balance_without_creating_records() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database_url = sqlite_url(&temporary.path().join("purchase-balance.db"));
+    let pool = demo0::db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let buyer = create_buyer_with_balance(&pool, "purchase_balance", 24).await;
+    let product = test_product("costly-token", 25, None, 1);
+
+    let error = shop::purchase(
+        &pool,
+        &buyer,
+        &product,
+        "01K2H7V9W4RRDMC0P9A8C5P006",
+        &config.currency,
+        timestamp(CREATED_AT),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.to_string().contains("余额不足"));
+    assert_eq!(user_balance(&pool, &buyer.id).await, 24);
+    assert_eq!(table_count(&pool, "shop_orders").await, 0);
+    assert_eq!(table_count(&pool, "redemption_vouchers").await, 0);
+    assert_eq!(table_count(&pool, "currency_logs").await, 0);
+}
+
+#[tokio::test]
+async fn purchase_rolls_back_order_and_debit_when_voucher_insert_fails() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database_url = sqlite_url(&temporary.path().join("purchase-rollback.db"));
+    let pool = demo0::db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let buyer = create_buyer_with_balance(&pool, "purchase_rollback", 100).await;
+    let product = test_product("rollback-token", 25, None, 1);
+    sqlx::query(
+        "CREATE TRIGGER fail_voucher_insert BEFORE INSERT ON redemption_vouchers BEGIN SELECT RAISE(ABORT, 'forced voucher failure'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        shop::purchase(
+            &pool,
+            &buyer,
+            &product,
+            "01K2H7V9W4RRDMC0P9A8C5P007",
+            &config.currency,
+            timestamp(CREATED_AT),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(user_balance(&pool, &buyer.id).await, 100);
+    assert_eq!(table_count(&pool, "shop_orders").await, 0);
+    assert_eq!(table_count(&pool, "redemption_vouchers").await, 0);
+    assert_eq!(table_count(&pool, "currency_logs").await, 0);
+}
+
 async fn insert_test_voucher(
     pool: &sqlx::SqlitePool,
     user_id: &str,
@@ -251,6 +460,64 @@ async fn insert_test_voucher(
     .await
     .unwrap();
     transaction.commit().await.unwrap();
+}
+
+async fn create_buyer_with_balance(
+    pool: &sqlx::SqlitePool,
+    username: &str,
+    balance: i64,
+) -> demo0::model::User {
+    let buyer = auth::create_user(
+        pool,
+        username,
+        "购买者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE users SET currency_balance = ? WHERE id = ?")
+        .bind(balance)
+        .bind(&buyer.id)
+        .execute(pool)
+        .await
+        .unwrap();
+    buyer
+}
+
+fn test_product(
+    id: &str,
+    price: i64,
+    valid_days: Option<i64>,
+    max_active_per_user: i64,
+) -> ShopProduct {
+    ShopProduct {
+        id: id.to_owned(),
+        name: "兑换码商品".to_owned(),
+        description: "购买时写入的商品快照".to_owned(),
+        icon_file: "token.png".to_owned(),
+        price,
+        valid_days,
+        max_active_per_user,
+        enabled: true,
+        sort_order: 1,
+    }
+}
+
+async fn user_balance(pool: &sqlx::SqlitePool, user_id: &str) -> i64 {
+    sqlx::query_scalar("SELECT currency_balance FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn table_count(pool: &sqlx::SqlitePool, table: &str) -> i64 {
+    let statement = format!("SELECT COUNT(*) FROM {table}");
+    sqlx::query_scalar(&statement)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 fn timestamp(value: &str) -> OffsetDateTime {

@@ -197,6 +197,19 @@ pub async fn find_order_by_purchase_key(
     .await?)
 }
 
+/// 在购买事务中按幂等键查找订单，避免读写之间出现重复创建窗口。
+pub async fn find_order_by_purchase_key_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    purchase_key: &str,
+) -> Result<Option<OrderRow>, AppError> {
+    Ok(sqlx::query_as::<_, OrderRow>(
+        "SELECT id, user_id, product_id, product_name, product_description, icon_file, fulfillment_type, price_paid, valid_days, purchase_key, created_at FROM shop_orders WHERE purchase_key = ?",
+    )
+    .bind(purchase_key)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
 pub async fn count_active_for_user_product(
     pool: &SqlitePool,
     user_id: &str,
@@ -212,6 +225,39 @@ pub async fn count_active_for_user_product(
     .bind(now)
     .fetch_one(pool)
     .await?)
+}
+
+/// 统计购买事务内仍有效的同商品凭证，过期边界与展示状态保持一致。
+pub async fn count_active_for_user_product_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    user_id: &str,
+    product_id: &str,
+    now: &str,
+) -> Result<i64, AppError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM shop_orders JOIN redemption_vouchers ON redemption_vouchers.order_id = shop_orders.id WHERE shop_orders.user_id = ? AND shop_orders.product_id = ? AND redemption_vouchers.status = ? AND (redemption_vouchers.expires_at IS NULL OR redemption_vouchers.expires_at > ?)",
+    )
+    .bind(user_id)
+    .bind(product_id)
+    .bind(STATUS_ACTIVE)
+    .bind(now)
+    .fetch_one(&mut **transaction)
+    .await?)
+}
+
+/// 通过无值更新取得 SQLite 写锁，使同一用户的购买检查和扣款串行执行。
+pub async fn lock_user_for_purchase(
+    transaction: &mut Transaction<'_, Sqlite>,
+    user_id: &str,
+) -> Result<(), AppError> {
+    sqlx::query("UPDATE users SET updated_at = updated_at WHERE id = ?")
+        .bind(user_id)
+        .execute(&mut **transaction)
+        .await?
+        .rows_affected()
+        .eq(&1)
+        .then_some(())
+        .ok_or(AppError::NotFound)
 }
 
 pub async fn active_counts_for_user(

@@ -2153,6 +2153,7 @@ fn currency_reason_label(reason: &str) -> &'static str {
         currency::REASON_ADMIN_GRANT => "管理员发放",
         currency::REASON_ADMIN_DEDUCT => "管理员扣除",
         currency::REASON_SPEND => "主动消费",
+        currency::REASON_SHOP_PURCHASE => "商城购买",
         currency::REASON_MEME_APPROVAL_REWARD => "Meme 审核奖励",
         currency::REASON_WEEKLY_CHECK_IN => "每周签到奖励",
         _ => "其他变动",
