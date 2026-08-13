@@ -14,7 +14,10 @@
       <a href="/memes">Memes</a>
       <a href="/novels">小说</a>
       {% if ctx.authenticated %}
-        <a href="/profile">{{ ctx.nickname }}</a>
+        <a class="profile-nav-link" href="/profile"
+           title="当前余额：{{ ctx.currency_symbol }} {{ ctx.currency_balance }} {{ ctx.currency_name }}"
+           aria-label="{{ ctx.nickname }}，当前余额 {{ ctx.currency_symbol }} {{ ctx.currency_balance }} {{ ctx.currency_name }}"
+           data-currency-balance="当前余额：{{ ctx.currency_symbol }} {{ ctx.currency_balance }} {{ ctx.currency_name }}">{{ ctx.nickname }}</a>
         {% if ctx.is_admin %}
           <div class="admin-menu">
             {% if ctx.has_pending_memes %}

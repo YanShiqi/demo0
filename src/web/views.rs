@@ -21,6 +21,13 @@ pub struct HomeTemplate {
     pub updates: Vec<UpdateView>,
     pub has_updates: bool,
     pub update_preview_limit: i64,
+    pub check_in_enabled: bool,
+    pub check_in_completed: bool,
+    pub check_in_reward_amount: i64,
+    pub check_in_currency_name: String,
+    pub check_in_currency_symbol: String,
+    pub check_in_message: String,
+    pub has_check_in_message: bool,
 }
 
 #[derive(Template)]

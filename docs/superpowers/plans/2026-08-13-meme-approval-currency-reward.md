@@ -35,7 +35,7 @@ Run `cargo test meme_approval_rewards_provider_once --test auth_flow`. It must f
 
 - [ ] **Step 3: Add typed configuration**
 
-Add `approval_reward_enabled: bool` and `approval_reward_amount: i64` to `MemeConfig` and its file/env sources (`MEME_APPROVAL_REWARD_ENABLED`, `MEME_APPROVAL_REWARD_AMOUNT`). Default to enabled and `1`; reject non-positive amounts. Add Chinese comments for both TOML and `.env.example` entries.
+Add `approval_reward_enabled: bool` and `approval_reward_amount: i64` to `MemeConfig` and its file/env sources (`MEME_APPROVAL_REWARD_ENABLED`, `MEME_APPROVAL_REWARD_AMOUNT`). Default to enabled and `2`; reject non-positive amounts. Add Chinese comments for both TOML and `.env.example` entries.
 
 - [ ] **Step 4: Run the focused test again**
 

@@ -11,6 +11,7 @@ pub const REASON_ADMIN_GRANT: &str = "admin_grant";
 pub const REASON_ADMIN_DEDUCT: &str = "admin_deduct";
 pub const REASON_SPEND: &str = "spend";
 pub const REASON_MEME_APPROVAL_REWARD: &str = "meme_approval_reward";
+pub const REASON_WEEKLY_CHECK_IN: &str = "weekly_check_in";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CurrencyReason {
@@ -18,6 +19,7 @@ pub enum CurrencyReason {
     AdminDeduct,
     Spend,
     MemeApprovalReward,
+    WeeklyCheckIn,
 }
 
 impl CurrencyReason {
@@ -27,6 +29,7 @@ impl CurrencyReason {
             Self::AdminDeduct => REASON_ADMIN_DEDUCT,
             Self::Spend => REASON_SPEND,
             Self::MemeApprovalReward => REASON_MEME_APPROVAL_REWARD,
+            Self::WeeklyCheckIn => REASON_WEEKLY_CHECK_IN,
         }
     }
 }
@@ -203,6 +206,31 @@ pub async fn reward_meme_approval(
             related_id: Some(meme_id),
             note: "Meme 审核通过奖励",
             idempotency_key: &idempotency_key,
+        },
+    )
+    .await
+}
+
+pub async fn reward_weekly_check_in(
+    transaction: &mut Transaction<'_, Sqlite>,
+    user_id: &str,
+    check_in_id: &str,
+    amount: i64,
+    idempotency_key: &str,
+) -> Result<CurrencyChange, AppError> {
+    if amount <= 0 {
+        return Err(AppError::BadRequest("签到奖励金额必须大于 0".to_owned()));
+    }
+    change_balance(
+        transaction,
+        BalanceChangeRequest {
+            target_user_id: user_id,
+            amount_delta: amount,
+            reason: CurrencyReason::WeeklyCheckIn,
+            operator_user_id: Some(user_id),
+            related_id: Some(check_in_id),
+            note: "每周签到奖励",
+            idempotency_key,
         },
     )
     .await

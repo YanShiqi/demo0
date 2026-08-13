@@ -6,11 +6,29 @@
   <h1>收容 控制 保护</h1>
   {% if ctx.authenticated %}
     <section class="panel home-tabs" aria-label="首页动态">
-      <div class="preview-heading">
+      <div class="preview-heading home-heading">
         <div>
           <p class="eyebrow">COMMUNITY FEED</p>
           <h2>首页动态</h2>
         </div>
+        {% if check_in_enabled %}
+        <aside class="check-in-card" aria-label="每周签到">
+          {% if check_in_completed %}
+            <strong>本周已签到</strong>
+            <small>下周一可再次签到</small>
+          {% else %}
+            <strong>本周签到</strong>
+            <small>领取 {{ check_in_currency_symbol }} {{ check_in_reward_amount }} {{ check_in_currency_name }}</small>
+            <form action="/check-in" method="post">
+              <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+              <button class="small-button" type="submit">签到领取</button>
+            </form>
+          {% endif %}
+          {% if has_check_in_message %}
+            <small class="check-in-result" role="status">{{ check_in_message }}</small>
+          {% endif %}
+        </aside>
+        {% endif %}
       </div>
       <nav class="status-tabs" aria-label="首页动态页签">
         {% if home_messages_tab_active %}

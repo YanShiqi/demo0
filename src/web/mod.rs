@@ -18,7 +18,7 @@ use crate::{
     app::AppState,
     auth,
     avatar::{self, DEFAULT_AVATAR},
-    currency,
+    check_in as check_in_service, currency,
     error::AppError,
     memes::{self, MemeRow, MemeWithTags, NewMeme},
     model::{PageContext, Role, SessionContext, SessionRow, User},
@@ -144,6 +144,12 @@ pub struct CurrencyAdjustForm {
 #[derive(Deserialize, Default)]
 pub struct HomeQuery {
     tab: Option<String>,
+    check_in: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct CheckInForm {
+    csrf_token: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -195,7 +201,7 @@ pub async fn home(
     Query(query): Query<HomeQuery>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    let (session, _, ctx) = page_context(&state, &headers).await?;
+    let (session, current_user, ctx) = page_context(&state, &headers).await?;
     let home_tab = HomeTab::from_query(query.tab.as_deref());
     let messages: Vec<MessageView> = public_messages::list_recent_limited(
         &state.pool,
@@ -233,6 +239,24 @@ pub async fn home(
         .map(update_view)
         .collect();
     let has_updates = !updates.is_empty();
+    let check_in_enabled = state.config.check_in.enabled && current_user.is_some();
+    let check_in_completed = match (check_in_enabled, current_user.as_ref()) {
+        (true, Some(user)) => {
+            let week_start =
+                check_in_service::current_week_start(state.config.display.utc_offset_hours)?;
+            check_in_service::has_checked_in(&state.pool, &user.id, &week_start).await?
+        }
+        _ => false,
+    };
+    let check_in_message = if check_in_enabled {
+        match query.check_in.as_deref() {
+            Some("success") => "本周签到成功，货币已到账".to_owned(),
+            Some("already") => "本周已经签到过了".to_owned(),
+            _ => String::new(),
+        }
+    } else {
+        String::new()
+    };
     render(
         HomeTemplate {
             ctx,
@@ -251,10 +275,45 @@ pub async fn home(
             updates,
             has_updates,
             update_preview_limit: state.config.updates.home_preview_limit,
+            check_in_enabled,
+            check_in_completed,
+            check_in_reward_amount: state.config.check_in.reward_amount,
+            check_in_currency_name: state.config.currency.name.clone(),
+            check_in_currency_symbol: state.config.currency.symbol.clone(),
+            has_check_in_message: !check_in_message.is_empty(),
+            check_in_message,
         },
         StatusCode::OK,
         session.new_cookie,
     )
+}
+
+pub async fn check_in(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<CheckInForm>,
+) -> Result<Response, AppError> {
+    if !state.config.check_in.enabled {
+        return Err(AppError::NotFound);
+    }
+    let session = auth::require_session(&state.pool, &headers).await?;
+    auth::verify_csrf(&session, &form.csrf_token)?;
+    let user = require_user(&state, &session).await?;
+    let week_start = check_in_service::current_week_start(state.config.display.utc_offset_hours)?;
+    let mut transaction = state.pool.begin().await?;
+    let result = check_in_service::perform(
+        &mut transaction,
+        &user.id,
+        &week_start,
+        state.config.check_in.reward_amount,
+    )
+    .await?;
+    transaction.commit().await?;
+    let target = match result {
+        check_in_service::CheckInResult::Awarded => "/?check_in=success",
+        check_in_service::CheckInResult::AlreadyCheckedIn => "/?check_in=already",
+    };
+    redirect(target, None)
 }
 
 pub async fn updates_page(
@@ -427,7 +486,7 @@ pub async fn change_password_required_page(
     if !user.must_change_password {
         return redirect("/profile", None);
     }
-    render_password_change_required(&session, &user, None, StatusCode::OK)
+    render_password_change_required(&state, &session, &user, None, StatusCode::OK).await
 }
 
 pub async fn change_required_password(
@@ -450,12 +509,16 @@ pub async fn change_required_password(
     .await
     {
         Ok(()) => redirect("/profile", None),
-        Err(AppError::BadRequest(message)) => render_password_change_required(
-            &session,
-            &user,
-            Some(&message),
-            StatusCode::BAD_REQUEST,
-        ),
+        Err(AppError::BadRequest(message)) => {
+            render_password_change_required(
+                &state,
+                &session,
+                &user,
+                Some(&message),
+                StatusCode::BAD_REQUEST,
+            )
+            .await
+        }
         Err(error) => Err(error),
     }
 }
@@ -1672,7 +1735,10 @@ async fn page_context_for_user(
     csrf_token: String,
     user: &User,
 ) -> Result<PageContext, AppError> {
-    let ctx = PageContext::authenticated(csrf_token, user);
+    let ctx = PageContext::authenticated(csrf_token, user).with_currency_display(
+        state.config.currency.name.clone(),
+        state.config.currency.symbol.clone(),
+    );
     if !matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin) {
         return Ok(ctx);
     }
@@ -1703,7 +1769,8 @@ async fn require_admin(state: &AppState, session: &SessionRow) -> Result<User, A
     Ok(user)
 }
 
-fn render_password_change_required(
+async fn render_password_change_required(
+    state: &AppState,
     session: &SessionRow,
     user: &User,
     error: Option<&str>,
@@ -1711,7 +1778,7 @@ fn render_password_change_required(
 ) -> Result<Response, AppError> {
     render(
         PasswordChangeRequiredTemplate {
-            ctx: PageContext::authenticated(session.csrf_token.clone(), user),
+            ctx: page_context_for_user(state, session.csrf_token.clone(), user).await?,
             has_error: error.is_some(),
             error: error.unwrap_or_default().to_owned(),
         },

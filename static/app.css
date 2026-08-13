@@ -72,6 +72,38 @@ body {
     color: var(--teal);
 }
 
+.profile-nav-link {
+    position: relative;
+}
+
+.profile-nav-link::after {
+    position: absolute;
+    top: calc(100% + 9px);
+    right: 0;
+    z-index: 4;
+    padding: 7px 10px;
+    color: var(--ink);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.3;
+    white-space: nowrap;
+    pointer-events: none;
+    content: attr(data-currency-balance);
+    background: var(--surface-raised);
+    border: 1px solid rgba(98, 199, 182, 0.28);
+    border-radius: 9px;
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.3);
+    opacity: 0;
+    transform: translateY(-4px);
+    transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.profile-nav-link:hover::after,
+.profile-nav-link:focus-visible::after {
+    opacity: 1;
+    transform: translateY(0);
+}
+
 .admin-menu {
     position: relative;
 }
@@ -252,6 +284,42 @@ body {
 
 .preview-heading h2 {
     margin: 0;
+}
+
+.home-heading {
+    align-items: flex-start;
+}
+
+.check-in-card {
+    display: grid;
+    min-width: 190px;
+    gap: 5px;
+    padding: 12px 14px;
+    background: rgba(98, 199, 182, 0.08);
+    border: 1px solid rgba(98, 199, 182, 0.28);
+    border-radius: 14px;
+}
+
+.check-in-card strong {
+    color: var(--teal);
+}
+
+.check-in-card small {
+    color: var(--muted);
+}
+
+.check-in-card .check-in-result {
+    padding-top: 6px;
+    color: var(--teal);
+}
+
+.check-in-card form {
+    margin-top: 5px;
+}
+
+.check-in-card .small-button {
+    padding: 7px 12px;
+    font-size: 13px;
 }
 
 .preview-heading a {

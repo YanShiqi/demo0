@@ -1,6 +1,7 @@
 pub mod app;
 pub mod auth;
 pub mod avatar;
+pub mod check_in;
 pub mod config;
 pub mod currency;
 pub mod db;

@@ -6,9 +6,10 @@ use axum::{
     http::{HeaderValue, Request, StatusCode, header},
 };
 use demo0::{
-    app, auth,
+    app, auth, check_in,
     config::{
-        Config, CurrencyConfig, DisplayConfig, MemeConfig, MessageConfig, NovelConfig, UpdateConfig,
+        CheckInConfig, Config, CurrencyConfig, DisplayConfig, MemeConfig, MessageConfig,
+        NovelConfig, UpdateConfig,
     },
     currency::{self, CurrencyReason},
     db,
@@ -218,6 +219,7 @@ async fn new_users_start_with_zero_currency_and_profile_shows_configured_name() 
     let html = response_html(response).await;
     assert!(html.contains("货币余额"));
     assert!(html.contains("🪙</span> 0 洲币"));
+    assert!(html.contains("data-currency-balance=\"当前余额：🪙 0 洲币\""));
 }
 
 #[tokio::test]
@@ -332,6 +334,190 @@ async fn super_admin_can_adjust_currency_and_spend_is_idempotent() {
 }
 
 #[tokio::test]
+async fn weekly_check_in_awards_currency_once() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("weekly-check-in.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let user = auth::create_user(
+        &pool,
+        "weekly_check_in_user",
+        "签到用户",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let week_start = "2026-08-17";
+    let mut transaction = pool.begin().await.unwrap();
+    let result = check_in::perform(&mut transaction, &user.id, week_start, 1)
+        .await
+        .unwrap();
+    assert_eq!(result, check_in::CheckInResult::Awarded);
+    transaction.commit().await.unwrap();
+
+    let balance = sqlx::query_scalar::<_, i64>("SELECT currency_balance FROM users WHERE id = ?")
+        .bind(&user.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(balance, 1);
+    let check_in_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM weekly_check_ins WHERE user_id = ? AND week_start = ?",
+    )
+    .bind(&user.id)
+    .bind(week_start)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(check_in_count, 1);
+    let log_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM currency_logs WHERE user_id = ? AND reason = ?",
+    )
+    .bind(&user.id)
+    .bind("weekly_check_in")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(log_count, 1);
+
+    let mut duplicate_transaction = pool.begin().await.unwrap();
+    let duplicate = check_in::perform(&mut duplicate_transaction, &user.id, week_start, 1)
+        .await
+        .unwrap();
+    assert_eq!(duplicate, check_in::CheckInResult::AlreadyCheckedIn);
+    duplicate_transaction.commit().await.unwrap();
+    let balance_after_duplicate =
+        sqlx::query_scalar::<_, i64>("SELECT currency_balance FROM users WHERE id = ?")
+            .bind(&user.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(balance_after_duplicate, 1);
+}
+
+#[tokio::test]
+async fn home_check_in_card_awards_currency_and_shows_completed_state() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("home-check-in.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let user = auth::create_user(
+        &pool,
+        "home_check_in_user",
+        "首页签到用户",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool.clone(), test_config(&temporary, database_url));
+
+    let anonymous_html = response_html(
+        router
+            .clone()
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(!anonymous_html.contains("每周签到"));
+
+    let cookie = sign_in(&router, &user.username, "127.0.0.1:43146").await;
+    let (_, csrf) = page_session_with_cookie(&router, "/", &cookie).await;
+    let home_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(home_html.contains("每周签到"));
+    assert!(home_html.contains("签到领取"));
+    assert!(home_html.contains("🪙 1 洲币"));
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/check-in")
+                .header(header::COOKIE, &cookie)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={csrf}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        &HeaderValue::from_static("/?check_in=success")
+    );
+
+    let completed_html = response_html(
+        router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/?check_in=success")
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(completed_html.contains("本周已签到"));
+    assert!(completed_html.contains("本周签到成功，货币已到账"));
+    assert!(!completed_html.contains("action=\"/check-in\""));
+    let card_start = completed_html
+        .find("<aside class=\"check-in-card\"")
+        .unwrap();
+    let card_end = completed_html[card_start..].find("</aside>").unwrap() + card_start;
+    let card_html = &completed_html[card_start..card_end];
+    assert!(card_html.contains("本周已签到"));
+    assert!(card_html.contains("下周一可再次签到"));
+    assert!(card_html.contains("本周签到成功，货币已到账"));
+
+    let balance = sqlx::query_scalar::<_, i64>("SELECT currency_balance FROM users WHERE id = ?")
+        .bind(&user.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(balance, 1);
+}
+
+#[tokio::test]
+async fn failed_weekly_check_in_rolls_back_check_in_record() {
+    let temporary = TempDir::new().unwrap();
+    let database_path = temporary.path().join("weekly-check-in-rollback.db");
+    let database_url = sqlite_url(&database_path);
+    let pool = db::connect(&database_url).await.unwrap();
+    let missing_user_id = "01J00000000000000000000000";
+    let mut transaction = pool.begin().await.unwrap();
+    let result = check_in::perform(&mut transaction, missing_user_id, "2026-08-17", 1).await;
+    assert!(result.is_err());
+    transaction.rollback().await.unwrap();
+
+    let check_in_count =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM weekly_check_ins WHERE user_id = ?")
+            .bind(missing_user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(check_in_count, 0);
+}
+
+#[tokio::test]
 async fn meme_approval_rewards_provider_once() {
     let temporary = TempDir::new().unwrap();
     let database_path = temporary.path().join("meme-approval-reward.db");
@@ -390,7 +576,7 @@ async fn meme_approval_rewards_provider_once() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(balance, 1);
+    assert_eq!(balance, 2);
     let reward_count = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM currency_logs WHERE user_id = ? AND reason = ? AND related_id = ?",
     )
@@ -422,7 +608,7 @@ async fn meme_approval_rewards_provider_once() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(balance_after_retry, 1);
+    assert_eq!(balance_after_retry, 2);
 }
 
 #[tokio::test]
@@ -2766,7 +2952,7 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             max_tag_length: 20,
             max_title_length: 60,
             approval_reward_enabled: true,
-            approval_reward_amount: 1,
+            approval_reward_amount: 2,
         },
         novels: NovelConfig {
             home_preview_limit: 5,
@@ -2783,6 +2969,10 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             max_admin_adjust_amount: 99_999,
             admin_user_search_limit: 20,
             max_note_length: 200,
+        },
+        check_in: CheckInConfig {
+            enabled: true,
+            reward_amount: 1,
         },
         updates: UpdateConfig {
             file: temporary.path().join("updates.toml"),

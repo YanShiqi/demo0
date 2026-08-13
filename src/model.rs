@@ -91,6 +91,9 @@ pub struct PageContext {
     pub csrf_token: String,
     pub authenticated: bool,
     pub nickname: String,
+    pub currency_name: String,
+    pub currency_symbol: String,
+    pub currency_balance: i64,
     pub is_admin: bool,
     pub is_super_admin: bool,
     pub pending_meme_count: i64,
@@ -103,6 +106,9 @@ impl PageContext {
             csrf_token,
             authenticated: false,
             nickname: String::new(),
+            currency_name: String::new(),
+            currency_symbol: String::new(),
+            currency_balance: 0,
             is_admin: false,
             is_super_admin: false,
             pending_meme_count: 0,
@@ -115,11 +121,20 @@ impl PageContext {
             csrf_token,
             authenticated: true,
             nickname: user.nickname.clone(),
+            currency_name: String::new(),
+            currency_symbol: String::new(),
+            currency_balance: user.currency_balance,
             is_admin: matches!(user.parsed_role(), Role::Admin | Role::SuperAdmin),
             is_super_admin: user.parsed_role() == Role::SuperAdmin,
             pending_meme_count: 0,
             has_pending_memes: false,
         }
+    }
+
+    pub fn with_currency_display(mut self, name: String, symbol: String) -> Self {
+        self.currency_name = name;
+        self.currency_symbol = symbol;
+        self
     }
 
     pub const fn with_pending_meme_count(mut self, pending_meme_count: i64) -> Self {

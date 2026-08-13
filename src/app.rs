@@ -28,6 +28,7 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
 
     Router::new()
         .route("/", get(web::home))
+        .route("/check-in", axum::routing::post(web::check_in))
         .route("/updates", get(web::updates_page))
         .route("/register", get(web::register_page).post(web::register))
         .route("/login", get(web::login_page).post(web::login))

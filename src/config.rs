@@ -31,7 +31,7 @@ const DEFAULT_MEME_MAX_TAGS_PER_MEME: usize = 5;
 const DEFAULT_MEME_MAX_TAG_LENGTH: usize = 20;
 const DEFAULT_MEME_MAX_TITLE_LENGTH: usize = 60;
 const DEFAULT_MEME_APPROVAL_REWARD_ENABLED: bool = true;
-const DEFAULT_MEME_APPROVAL_REWARD_AMOUNT: i64 = 1;
+const DEFAULT_MEME_APPROVAL_REWARD_AMOUNT: i64 = 2;
 const DEFAULT_NOVEL_HOME_PREVIEW_LIMIT: i64 = 5;
 const DEFAULT_NOVEL_CHAPTER_MAX_UPLOAD_BYTES: usize = 256 * 1024;
 const DEFAULT_NOVEL_MAX_TITLE_LENGTH: usize = 60;
@@ -46,6 +46,8 @@ const DEFAULT_CURRENCY_LOG_PAGE_SIZE: i64 = 30;
 const DEFAULT_CURRENCY_MAX_ADMIN_ADJUST_AMOUNT: i64 = 99_999;
 const DEFAULT_CURRENCY_ADMIN_USER_SEARCH_LIMIT: i64 = 20;
 const DEFAULT_CURRENCY_MAX_NOTE_LENGTH: usize = 200;
+const DEFAULT_CHECK_IN_ENABLED: bool = true;
+const DEFAULT_CHECK_IN_REWARD_AMOUNT: i64 = 1;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -60,6 +62,7 @@ pub struct Config {
     pub novels: NovelConfig,
     pub updates: UpdateConfig,
     pub currency: CurrencyConfig,
+    pub check_in: CheckInConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -122,6 +125,12 @@ pub struct CurrencyConfig {
     pub max_note_length: usize,
 }
 
+#[derive(Clone, Debug)]
+pub struct CheckInConfig {
+    pub enabled: bool,
+    pub reward_amount: i64,
+}
+
 impl Config {
     pub fn from_env() -> Result<Self> {
         let file_config = FileConfig::load(DEFAULT_CONFIG_PATH)?;
@@ -164,6 +173,7 @@ impl Config {
         let novels = NovelConfig::from_sources(file_config.novels)?;
         let updates = UpdateConfig::from_sources(file_config.updates)?;
         let currency = CurrencyConfig::from_sources(file_config.currency)?;
+        let check_in = CheckInConfig::from_sources(file_config.check_in)?;
 
         Ok(Self {
             host,
@@ -177,6 +187,7 @@ impl Config {
             novels,
             updates,
             currency,
+            check_in,
         })
     }
 
@@ -255,6 +266,23 @@ impl CurrencyConfig {
             max_admin_adjust_amount,
             admin_user_search_limit,
             max_note_length,
+        })
+    }
+}
+
+impl CheckInConfig {
+    fn from_sources(file_config: Option<CheckInFileConfig>) -> Result<Self> {
+        let file_config = file_config.unwrap_or_default();
+        let enabled = parse_optional_env("CHECK_IN_ENABLED")?
+            .or(file_config.enabled)
+            .unwrap_or(DEFAULT_CHECK_IN_ENABLED);
+        let reward_amount = parse_optional_env("CHECK_IN_REWARD_AMOUNT")?
+            .or(file_config.reward_amount)
+            .unwrap_or(DEFAULT_CHECK_IN_REWARD_AMOUNT);
+        anyhow::ensure!(reward_amount > 0, "CHECK_IN_REWARD_AMOUNT 必须大于 0");
+        Ok(Self {
+            enabled,
+            reward_amount,
         })
     }
 }
@@ -467,6 +495,7 @@ struct FileConfig {
     novels: Option<NovelFileConfig>,
     updates: Option<UpdatesFileConfig>,
     currency: Option<CurrencyFileConfig>,
+    check_in: Option<CheckInFileConfig>,
 }
 
 impl FileConfig {
@@ -559,6 +588,12 @@ struct CurrencyFileConfig {
     max_admin_adjust_amount: Option<i64>,
     admin_user_search_limit: Option<i64>,
     max_note_length: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct CheckInFileConfig {
+    enabled: Option<bool>,
+    reward_amount: Option<i64>,
 }
 
 fn parse_optional_env<T>(name: &str) -> Result<Option<T>>

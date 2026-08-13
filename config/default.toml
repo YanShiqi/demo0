@@ -62,7 +62,7 @@ max_title_length = 60
 # Meme 首次审核通过时是否发放货币奖励。
 approval_reward_enabled = true
 # 每个 Meme 首次通过时发放的整数货币数量。
-approval_reward_amount = 1
+approval_reward_amount = 2
 
 [novels]
 # 首页小说页签最多展示的最近更新章节数量。
@@ -97,3 +97,9 @@ max_admin_adjust_amount = 99999
 admin_user_search_limit = 20
 # 管理员调整货币时备注的最大字符数。
 max_note_length = 200
+
+[check_in]
+# 是否开启每周签到功能；关闭后首页不展示入口，签到端点也不接受请求。
+enabled = true
+# 每周签到成功后发放的整数货币数量。
+reward_amount = 1

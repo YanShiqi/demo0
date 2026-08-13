@@ -808,7 +808,7 @@ mod tests {
             max_tag_length: 20,
             max_title_length: 60,
             approval_reward_enabled: true,
-            approval_reward_amount: 1,
+            approval_reward_amount: 2,
         }
     }
 
