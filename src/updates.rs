@@ -119,6 +119,16 @@ mod tests {
     }
 
     #[test]
+    fn repository_update_file_shows_latest_same_day_version_first() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("content/updates.toml");
+
+        let entries = load_file(&path).unwrap();
+
+        assert_eq!(entries.first().unwrap().version, "0.1.4");
+        assert_eq!(entries.first().unwrap().title, "商城与兑换凭证");
+    }
+
+    #[test]
     fn rejects_invalid_date_and_missing_title() {
         let directory = tempdir().unwrap();
         let invalid_date = directory.path().join("invalid-date.toml");
