@@ -1566,6 +1566,7 @@ async fn users_can_share_and_manage_public_messages() {
     let html = response_html(messages_response).await;
     assert!(html.contains("大家好🐷"));
     assert!(html.contains("/u/message_user"));
+    assert!(html.contains("class=\"checkbox-label\""));
 
     let home_response = router
         .clone()

@@ -404,6 +404,28 @@ label {
     font-weight: 700;
 }
 
+.checkbox-label {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+}
+
+.checkbox-label input[type="checkbox"] {
+    width: auto;
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0;
+    accent-color: var(--teal);
+}
+
+.checkbox-label small {
+    flex-basis: 100%;
+    margin-left: 26px;
+    font-weight: 400;
+}
+
 input,
 textarea {
     width: 100%;

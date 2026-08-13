@@ -14,7 +14,7 @@
   <form action="/messages" method="post">
     <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
     <label>内容<textarea name="body" rows="4" placeholder="说点什么，让大家发现你">{{ body }}</textarea><small>{{ max_length }} 个字符以内，支持换行和 emoji</small></label>
-    <label class="checkbox-label"><input type="checkbox" name="anonymous" value="true" {% if anonymous %}checked{% endif %}> 匿名留言 <small>其他用户看不到你的昵称和头像，管理员仍可追溯</small></label>
+    <label class="checkbox-label"><input type="checkbox" name="anonymous" value="true" {% if anonymous %}checked{% endif %}> 匿名留言 <small>其他用户看不到你的昵称和头像</small></label>
     <button class="button" type="submit">发布留言</button>
   </form>
 </section>
