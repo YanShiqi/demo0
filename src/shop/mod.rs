@@ -2,6 +2,8 @@ pub mod catalog;
 pub mod store;
 pub mod token;
 
+use std::path::Path;
+
 use sqlx::SqlitePool;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 use ulid::Ulid;
@@ -105,10 +107,20 @@ pub fn validate_product_values(
     if product.icon_storage_name.trim().is_empty()
         || product.icon_storage_name != product.icon_storage_name.trim()
         || product.icon_storage_name.contains(['/', '\\'])
+        || matches!(product.icon_storage_name.as_str(), "." | "..")
     {
         return Err(AppError::BadRequest("商品图标存储名无效".to_owned()));
     }
-    if !matches!(product.icon_media_type.as_str(), "image/webp" | "image/gif") {
+    // 存储名由服务端生成；仍需绑定扩展名和可信媒体类型，避免响应头与文件类型脱节。
+    let expected_media_type = match Path::new(&product.icon_storage_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        _ => return Err(AppError::BadRequest("商品图标存储名无效".to_owned())),
+    };
+    if product.icon_media_type != expected_media_type {
         return Err(AppError::BadRequest("商品图标媒体类型无效".to_owned()));
     }
     Ok(())

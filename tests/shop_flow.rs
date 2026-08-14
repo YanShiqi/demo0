@@ -88,28 +88,100 @@ async fn shop_product_persistence_enforces_required_database_constraints() {
     assert!(saved.enabled);
     assert_eq!(saved.icon_storage_name, "01K2H7V9W4RRDMC0P9A8C5I001.webp");
 
-    let invalid_price = sqlx::query(
+    let duplicate_id = insert_raw_product(
+        &pool,
+        &actor.id,
+        RawProduct {
+            id: "milk_tea",
+            price: 10,
+            valid_days: Some(30),
+            max_active_per_user: 1,
+            total_limit: None,
+            sold_count: 0,
+        },
+    )
+    .await;
+    assert!(duplicate_id.is_err());
+    for (id, price, valid_days, max_active_per_user, total_limit, sold_count) in [
+        ("invalid_price", 0, Some(30), 1, None, 0),
+        ("invalid_valid_days", 10, Some(0), 1, None, 0),
+        ("invalid_personal_limit", 10, Some(30), 0, None, 0),
+        ("invalid_total_limit", 10, Some(30), 1, Some(0), 0),
+        ("invalid_sold_count", 10, Some(30), 1, None, -1),
+        ("invalid_limit_below_sold", 10, Some(30), 1, Some(1), 2),
+    ] {
+        let result = insert_raw_product(
+            &pool,
+            &actor.id,
+            RawProduct {
+                id,
+                price,
+                valid_days,
+                max_active_per_user,
+                total_limit,
+                sold_count,
+            },
+        )
+        .await;
+        assert!(result.is_err(), "database accepted invalid product {id}");
+    }
+}
+
+#[tokio::test]
+async fn shop_product_persistence_rejects_unsafe_or_mismatched_icon_metadata() {
+    let product = test_database_product("icon_validation");
+
+    for (storage_name, media_type) in [
+        (".", "image/webp"),
+        ("..", "image/webp"),
+        ("01K2H7V9W4RRDMC0P9A8C5I001.gif", "image/webp"),
+        ("01K2H7V9W4RRDMC0P9A8C5I001.webp", "image/gif"),
+    ] {
+        let mut invalid = product.clone();
+        invalid.icon_storage_name = storage_name.to_owned();
+        invalid.icon_media_type = media_type.to_owned();
+        assert!(
+            shop::validate_product_values(&invalid, 0).is_err(),
+            "accepted invalid icon metadata {storage_name} / {media_type}"
+        );
+    }
+}
+
+async fn insert_raw_product(
+    pool: &sqlx::SqlitePool,
+    actor_user_id: &str,
+    values: RawProduct<'_>,
+) -> Result<sqlx::sqlite::SqliteQueryResult, sqlx::Error> {
+    sqlx::query(
         "INSERT INTO shop_products (id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind("invalid_price")
+    .bind(values.id)
     .bind("无效价格")
     .bind("数据库约束应拒绝非正价格。")
     .bind("01K2H7V9W4RRDMC0P9A8C5I002.webp")
     .bind("image/webp")
-    .bind(0_i64)
-    .bind(Option::<i64>::None)
-    .bind(1_i64)
-    .bind(Option::<i64>::None)
-    .bind(0_i64)
+    .bind(values.price)
+    .bind(values.valid_days)
+    .bind(values.max_active_per_user)
+    .bind(values.total_limit)
+    .bind(values.sold_count)
     .bind(true)
     .bind(2_i64)
-    .bind(&actor.id)
-    .bind(&actor.id)
+    .bind(actor_user_id)
+    .bind(actor_user_id)
     .bind(CREATED_AT)
     .bind(CREATED_AT)
-    .execute(&pool)
-    .await;
-    assert!(invalid_price.is_err());
+    .execute(pool)
+    .await
+}
+
+struct RawProduct<'a> {
+    id: &'a str,
+    price: i64,
+    valid_days: Option<i64>,
+    max_active_per_user: i64,
+    total_limit: Option<i64>,
+    sold_count: i64,
 }
 
 #[tokio::test]
