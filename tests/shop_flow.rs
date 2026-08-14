@@ -60,6 +60,156 @@ async fn shop_migration_creates_order_voucher_and_audit_tables() {
 }
 
 #[tokio::test]
+async fn shop_product_persistence_enforces_required_database_constraints() {
+    let temporary = tempfile::tempdir().unwrap();
+    let pool = demo0::db::connect(&sqlite_url(&temporary.path().join("products.db")))
+        .await
+        .unwrap();
+    let actor = auth::create_user(
+        &pool,
+        "product_actor",
+        "商品操作者",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+
+    let product = test_database_product("milk_tea");
+    store::insert_product(&pool, &product, &actor.id, CREATED_AT)
+        .await
+        .unwrap();
+    let saved = store::find_product(&pool, "milk_tea")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.sold_count, 0);
+    assert_eq!(saved.total_limit, None);
+    assert!(saved.enabled);
+    assert_eq!(saved.icon_storage_name, "01K2H7V9W4RRDMC0P9A8C5I001.webp");
+
+    let invalid_price = sqlx::query(
+        "INSERT INTO shop_products (id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind("invalid_price")
+    .bind("无效价格")
+    .bind("数据库约束应拒绝非正价格。")
+    .bind("01K2H7V9W4RRDMC0P9A8C5I002.webp")
+    .bind("image/webp")
+    .bind(0_i64)
+    .bind(Option::<i64>::None)
+    .bind(1_i64)
+    .bind(Option::<i64>::None)
+    .bind(0_i64)
+    .bind(true)
+    .bind(2_i64)
+    .bind(&actor.id)
+    .bind(&actor.id)
+    .bind(CREATED_AT)
+    .bind(CREATED_AT)
+    .execute(&pool)
+    .await;
+    assert!(invalid_price.is_err());
+}
+
+#[tokio::test]
+async fn shop_product_persistence_lists_updates_and_retains_deleted_audit_history() {
+    let temporary = tempfile::tempdir().unwrap();
+    let pool = demo0::db::connect(&sqlite_url(&temporary.path().join("product-history.db")))
+        .await
+        .unwrap();
+    let actor = auth::create_user(
+        &pool,
+        "product_history_actor",
+        "商品历史操作者",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let product = test_database_product("gift_card");
+
+    shop::validate_product_for_create(&pool, &product)
+        .await
+        .unwrap();
+    store::insert_product(&pool, &product, &actor.id, CREATED_AT)
+        .await
+        .unwrap();
+    store::insert_product_audit(
+        &pool,
+        &store::NewProductAudit {
+            id: "01K2H7V9W4RRDMC0P9A8C5A001".to_owned(),
+            product_id: "gift_card".to_owned(),
+            action: store::PRODUCT_AUDIT_CREATED.to_owned(),
+            actor_user_id: actor.id.clone(),
+            before_snapshot: String::new(),
+            after_snapshot: "{\"name\":\"礼品卡\"}".to_owned(),
+            created_at: CREATED_AT.to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut updated = product.clone();
+    updated.price = 20;
+    updated.total_limit = Some(10);
+    store::update_product(
+        &pool,
+        "gift_card",
+        &updated,
+        &actor.id,
+        "2026-08-14T12:00:00Z",
+    )
+    .await
+    .unwrap();
+    store::set_product_enabled(&pool, "gift_card", false, &actor.id, "2026-08-14T12:00:00Z")
+        .await
+        .unwrap();
+    let enabled = store::list_enabled_products(&pool).await.unwrap();
+    assert!(enabled.is_empty());
+    let admin_products = store::list_admin_products(&pool).await.unwrap();
+    assert_eq!(admin_products.len(), 1);
+    assert_eq!(admin_products[0].price, 20);
+    assert_eq!(admin_products[0].total_limit, Some(10));
+    assert!(!admin_products[0].enabled);
+
+    store::insert_product_audit(
+        &pool,
+        &store::NewProductAudit {
+            id: "01K2H7V9W4RRDMC0P9A8C5A002".to_owned(),
+            product_id: "gift_card".to_owned(),
+            action: store::PRODUCT_AUDIT_DELETED.to_owned(),
+            actor_user_id: actor.id.clone(),
+            before_snapshot: "{\"name\":\"礼品卡\"}".to_owned(),
+            after_snapshot: String::new(),
+            created_at: "2026-08-14T12:01:00Z".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(store::delete_product(&pool, "gift_card").await.unwrap());
+    assert!(
+        store::find_product(&pool, "gift_card")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let audit_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM shop_product_audit_logs WHERE product_id = ?",
+    )
+    .bind("gift_card")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 2);
+
+    let reuse_error = shop::validate_product_for_create(&pool, &product)
+        .await
+        .unwrap_err();
+    assert!(reuse_error.to_string().contains("不可复用"));
+}
+
+#[tokio::test]
 async fn store_user_voucher_page_does_not_include_another_users_order() {
     let temporary = tempfile::tempdir().unwrap();
     let database_url = sqlite_url(&temporary.path().join("store-page.db"));
@@ -550,6 +700,21 @@ fn create_test_icon(icon_dir: &Path) {
     image::DynamicImage::new_rgba8(2, 2)
         .save(icon_dir.join("token.png"))
         .unwrap();
+}
+
+fn test_database_product(id: &str) -> store::NewProduct {
+    store::NewProduct {
+        id: id.to_owned(),
+        name: "礼品卡".to_owned(),
+        description: "可用于线下兑换的礼品卡。".to_owned(),
+        icon_storage_name: "01K2H7V9W4RRDMC0P9A8C5I001.webp".to_owned(),
+        icon_media_type: "image/webp".to_owned(),
+        price: 10,
+        valid_days: Some(30),
+        max_active_per_user: 2,
+        total_limit: None,
+        sort_order: 1,
+    }
 }
 
 fn test_config(temporary: &TempDir, database_url: String) -> Config {

@@ -10,6 +10,72 @@ pub const STATUS_ACTIVE: &str = "active";
 pub const STATUS_REDEEMED: &str = "redeemed";
 pub const STATUS_CANCELLED: &str = "cancelled";
 
+pub const PRODUCT_AUDIT_CREATED: &str = "created";
+pub const PRODUCT_AUDIT_UPDATED: &str = "updated";
+pub const PRODUCT_AUDIT_ENABLED: &str = "enabled";
+pub const PRODUCT_AUDIT_DISABLED: &str = "disabled";
+pub const PRODUCT_AUDIT_DELETED: &str = "deleted";
+
+/// 数据库商品的完整当前值；订单会在购买时保存其中必要字段的独立快照。
+#[derive(Clone, Debug, Eq, PartialEq, FromRow)]
+pub struct ProductRow {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub icon_storage_name: String,
+    pub icon_media_type: String,
+    pub price: i64,
+    pub valid_days: Option<i64>,
+    pub max_active_per_user: i64,
+    pub total_limit: Option<i64>,
+    pub sold_count: i64,
+    pub enabled: bool,
+    pub sort_order: i64,
+    pub created_by_user_id: String,
+    pub updated_by_user_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 新建或编辑商品时由上层明确提供的可变字段，销量只能由购买事务修改。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NewProduct {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub icon_storage_name: String,
+    pub icon_media_type: String,
+    pub price: i64,
+    pub valid_days: Option<i64>,
+    pub max_active_per_user: i64,
+    pub total_limit: Option<i64>,
+    pub sort_order: i64,
+}
+
+/// 商品管理审计记录；快照由服务层序列化为文本，表中不保存图片二进制。
+#[derive(Clone, Debug, Eq, PartialEq, FromRow)]
+pub struct ProductAuditRow {
+    pub id: String,
+    pub product_id: String,
+    pub action: String,
+    pub actor_user_id: String,
+    pub before_snapshot: String,
+    pub after_snapshot: String,
+    pub created_at: String,
+}
+
+/// 待写入的商品审计值；由服务层创建 ULID 和 RFC 3339 时间后整体提交。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NewProductAudit {
+    pub id: String,
+    pub product_id: String,
+    pub action: String,
+    pub actor_user_id: String,
+    pub before_snapshot: String,
+    pub after_snapshot: String,
+    pub created_at: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, FromRow)]
 pub struct OrderRow {
     pub id: String,
@@ -114,6 +180,177 @@ pub struct NewVoucher {
     pub token_mask: String,
     pub expires_at: Option<String>,
     pub created_at: String,
+}
+
+/// 按公开商城所需的状态和排序读取已上架商品。
+pub async fn list_enabled_products(pool: &SqlitePool) -> Result<Vec<ProductRow>, AppError> {
+    Ok(sqlx::query_as::<_, ProductRow>(
+        "SELECT id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at FROM shop_products WHERE enabled = ? ORDER BY sort_order ASC, id ASC",
+    )
+    .bind(true)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// 管理页读取所有商品，已下架商品也保留在列表中供继续管理。
+pub async fn list_admin_products(pool: &SqlitePool) -> Result<Vec<ProductRow>, AppError> {
+    Ok(sqlx::query_as::<_, ProductRow>(
+        "SELECT id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at FROM shop_products ORDER BY sort_order ASC, id ASC",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+/// 根据稳定商品 ID 查找当前商品，不隐式过滤下架状态。
+pub async fn find_product(
+    pool: &SqlitePool,
+    product_id: &str,
+) -> Result<Option<ProductRow>, AppError> {
+    Ok(sqlx::query_as::<_, ProductRow>(
+        "SELECT id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at FROM shop_products WHERE id = ?",
+    )
+    .bind(product_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// 新建商品；时间由 Rust 生成后绑定，避免业务 SQL 依赖数据库时钟。
+pub async fn insert_product(
+    pool: &SqlitePool,
+    product: &NewProduct,
+    actor_user_id: &str,
+    now: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO shop_products (id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&product.id)
+    .bind(&product.name)
+    .bind(&product.description)
+    .bind(&product.icon_storage_name)
+    .bind(&product.icon_media_type)
+    .bind(product.price)
+    .bind(product.valid_days)
+    .bind(product.max_active_per_user)
+    .bind(product.total_limit)
+    .bind(0_i64)
+    .bind(true)
+    .bind(product.sort_order)
+    .bind(actor_user_id)
+    .bind(actor_user_id)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// 编辑商品的可变字段；稳定 ID、销量和创建信息不允许通过此接口改写。
+pub async fn update_product(
+    pool: &SqlitePool,
+    product_id: &str,
+    product: &NewProduct,
+    actor_user_id: &str,
+    now: &str,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE shop_products SET name = ?, description = ?, icon_storage_name = ?, icon_media_type = ?, price = ?, valid_days = ?, max_active_per_user = ?, total_limit = ?, sort_order = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&product.name)
+    .bind(&product.description)
+    .bind(&product.icon_storage_name)
+    .bind(&product.icon_media_type)
+    .bind(product.price)
+    .bind(product.valid_days)
+    .bind(product.max_active_per_user)
+    .bind(product.total_limit)
+    .bind(product.sort_order)
+    .bind(actor_user_id)
+    .bind(now)
+    .bind(product_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 立即切换商品上架状态，商城下一次读取即可看到新状态。
+pub async fn set_product_enabled(
+    pool: &SqlitePool,
+    product_id: &str,
+    enabled: bool,
+    actor_user_id: &str,
+    now: &str,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE shop_products SET enabled = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(enabled)
+    .bind(actor_user_id)
+    .bind(now)
+    .bind(product_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 仅在没有历史订单时删除商品，订单快照仍可通过商品 ID 追溯原来的审计记录。
+pub async fn delete_product(pool: &SqlitePool, product_id: &str) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "DELETE FROM shop_products WHERE id = ? AND NOT EXISTS (SELECT 1 FROM shop_orders WHERE product_id = ?)",
+    )
+    .bind(product_id)
+    .bind(product_id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 写入商品管理审计；商品 ID 不建外键，以保证永久删除后的历史仍可查询。
+pub async fn insert_product_audit(
+    pool: &SqlitePool,
+    audit: &NewProductAudit,
+) -> Result<(), AppError> {
+    if !is_product_audit_action(&audit.action) {
+        return Err(AppError::BadRequest("商品审计操作类型无效".to_owned()));
+    }
+    sqlx::query(
+        "INSERT INTO shop_product_audit_logs (id, product_id, action, actor_user_id, before_snapshot, after_snapshot, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&audit.id)
+    .bind(&audit.product_id)
+    .bind(&audit.action)
+    .bind(&audit.actor_user_id)
+    .bind(&audit.before_snapshot)
+    .bind(&audit.after_snapshot)
+    .bind(&audit.created_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// 已审计过的 ID 永远不可复用，即使对应商品随后被永久删除。
+pub async fn product_id_has_audit_history(
+    pool: &SqlitePool,
+    product_id: &str,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM shop_product_audit_logs WHERE product_id = ?",
+    )
+    .bind(product_id)
+    .fetch_one(pool)
+    .await?
+        > 0)
+}
+
+fn is_product_audit_action(action: &str) -> bool {
+    matches!(
+        action,
+        PRODUCT_AUDIT_CREATED
+            | PRODUCT_AUDIT_UPDATED
+            | PRODUCT_AUDIT_ENABLED
+            | PRODUCT_AUDIT_DISABLED
+            | PRODUCT_AUDIT_DELETED
+    )
 }
 
 #[derive(FromRow)]
