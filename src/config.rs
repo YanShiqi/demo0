@@ -1,8 +1,4 @@
-use std::{
-    env,
-    net::SocketAddr,
-    path::{Path, PathBuf},
-};
+use std::{env, net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -54,10 +50,7 @@ const DEFAULT_CURRENCY_MAX_NOTE_LENGTH: usize = 200;
 const DEFAULT_CHECK_IN_ENABLED: bool = true;
 const DEFAULT_CHECK_IN_REWARD_AMOUNT: i64 = 1;
 const DEFAULT_SHOP_ENABLED: bool = true;
-const DEFAULT_SHOP_PRODUCTS_FILE: &str = "content/shop.toml";
 const DEFAULT_SHOP_ICON_DIR: &str = "data/shop/product-icons";
-// 旧目录仅供过渡期 TOML 商品校验使用，数据库商品接入后随目录加载逻辑一并删除。
-const LEGACY_SHOP_CATALOG_ICON_DIR: &str = "static/shop/products";
 const DEFAULT_SHOP_PAGE_SIZE: i64 = 12;
 const DEFAULT_SHOP_VOUCHER_PAGE_SIZE: i64 = 20;
 const DEFAULT_SHOP_ADMIN_NOTE_MAX_LENGTH: usize = 200;
@@ -69,8 +62,6 @@ const DEFAULT_SHOP_ICON_MAX_GIF_FRAMES: usize = 120;
 const DEFAULT_SHOP_ICON_MAX_DECODED_PIXELS: u64 = 80_000_000;
 const DEFAULT_SHOP_ICON_MAX_STORED_BYTES: usize = 1024 * 1024;
 const DEFAULT_SHOP_ICON_RESIZE_DIMENSIONS: &[u32] = &[512, 384, 256];
-const DEFAULT_SHOP_ICON_MAX_BYTES: usize = 256 * 1024;
-const DEFAULT_SHOP_ICON_MAX_DIMENSION: u32 = 1024;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -159,7 +150,6 @@ pub struct CheckInConfig {
 #[derive(Clone, Debug)]
 pub struct ShopConfig {
     pub enabled: bool,
-    pub products_file: PathBuf,
     pub icon_dir: PathBuf,
     pub page_size: i64,
     pub voucher_page_size: i64,
@@ -172,9 +162,6 @@ pub struct ShopConfig {
     pub icon_max_decoded_pixels: u64,
     pub icon_max_stored_bytes: usize,
     pub icon_resize_dimensions: Vec<u32>,
-    pub icon_max_bytes: usize,
-    pub icon_max_dimension: u32,
-    pub products: Vec<crate::shop::catalog::ShopProduct>,
 }
 
 impl Config {
@@ -252,11 +239,6 @@ impl ShopConfig {
         let enabled = parse_optional_env("SHOP_ENABLED")?
             .or(file_config.enabled)
             .unwrap_or(DEFAULT_SHOP_ENABLED);
-        let products_file = env::var("SHOP_PRODUCTS_FILE")
-            .ok()
-            .or(file_config.products_file)
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_SHOP_PRODUCTS_FILE));
         let icon_dir = env::var("SHOP_ICON_DIR")
             .ok()
             .or(file_config.icon_dir)
@@ -295,12 +277,6 @@ impl ShopConfig {
         let icon_resize_dimensions = parse_optional_env_list("SHOP_ICON_RESIZE_DIMENSIONS")?
             .or(file_config.icon_resize_dimensions)
             .unwrap_or_else(|| DEFAULT_SHOP_ICON_RESIZE_DIMENSIONS.to_vec());
-        let icon_max_bytes = parse_optional_env("SHOP_ICON_MAX_BYTES")?
-            .or(file_config.icon_max_bytes)
-            .unwrap_or(DEFAULT_SHOP_ICON_MAX_BYTES);
-        let icon_max_dimension = parse_optional_env("SHOP_ICON_MAX_DIMENSION")?
-            .or(file_config.icon_max_dimension)
-            .unwrap_or(DEFAULT_SHOP_ICON_MAX_DIMENSION);
 
         // 启动前拒绝无效限制，避免后续请求在不安全的边界条件下运行。
         anyhow::ensure!(page_size > 0, "SHOP_PAGE_SIZE 必须大于 0");
@@ -338,18 +314,8 @@ impl ShopConfig {
             "SHOP_ICON_MAX_STORED_BYTES 必须大于 0"
         );
         validate_resize_dimensions(&icon_resize_dimensions)?;
-        anyhow::ensure!(icon_max_bytes > 0, "SHOP_ICON_MAX_BYTES 必须大于 0");
-        anyhow::ensure!(icon_max_dimension > 0, "SHOP_ICON_MAX_DIMENSION 必须大于 0");
-        let products = crate::shop::catalog::load_products(
-            &products_file,
-            Path::new(LEGACY_SHOP_CATALOG_ICON_DIR),
-            icon_max_bytes,
-            icon_max_dimension,
-        )?;
-
         Ok(Self {
             enabled,
-            products_file,
             icon_dir,
             page_size,
             voucher_page_size,
@@ -362,9 +328,6 @@ impl ShopConfig {
             icon_max_decoded_pixels,
             icon_max_stored_bytes,
             icon_resize_dimensions,
-            icon_max_bytes,
-            icon_max_dimension,
-            products,
         })
     }
 }
@@ -780,7 +743,6 @@ struct CheckInFileConfig {
 #[derive(Debug, Default, Deserialize)]
 struct ShopFileConfig {
     enabled: Option<bool>,
-    products_file: Option<String>,
     icon_dir: Option<String>,
     page_size: Option<i64>,
     voucher_page_size: Option<i64>,
@@ -793,8 +755,6 @@ struct ShopFileConfig {
     icon_max_decoded_pixels: Option<u64>,
     icon_max_stored_bytes: Option<usize>,
     icon_resize_dimensions: Option<Vec<u32>>,
-    icon_max_bytes: Option<usize>,
-    icon_max_dimension: Option<u32>,
 }
 
 fn parse_optional_env<T>(name: &str) -> Result<Option<T>>
@@ -867,7 +827,6 @@ mod tests {
             icon_max_decoded_pixels: Some(12_000_000),
             icon_max_stored_bytes: Some(700_000),
             icon_resize_dimensions: Some(vec![480, 320, 160]),
-            ..ShopFileConfig::default()
         }))
         .unwrap();
 

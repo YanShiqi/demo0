@@ -13,7 +13,7 @@ use demo0::{
         NovelConfig, ShopConfig, UpdateConfig,
     },
     model::Role,
-    shop::{self, catalog::ShopProduct, store},
+    shop::{self, store},
     updates::UpdateEntry,
 };
 use http_body_util::BodyExt;
@@ -491,12 +491,22 @@ async fn purchase_creates_snapshot_debits_balance_and_keeps_plaintext_out_of_dat
     let config = test_config(&temporary, database_url);
     let buyer = create_buyer_with_balance(&pool, "purchase_created", 100).await;
     let product = test_product("snapshot-token", 25, Some(7), 2);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
     let purchase_key = "01K2H7V9W4RRDMC0P9A8C5P001";
     let now = timestamp(CREATED_AT);
 
-    let outcome = shop::purchase(&pool, &buyer, &product, purchase_key, &config.currency, now)
-        .await
-        .unwrap();
+    let outcome = shop::purchase(
+        &pool,
+        &buyer,
+        &product.id,
+        purchase_key,
+        &config.currency,
+        now,
+    )
+    .await
+    .unwrap();
     let shop::PurchaseOutcome::Created(created) = outcome else {
         panic!("expected a newly created purchase");
     };
@@ -535,6 +545,130 @@ async fn purchase_creates_snapshot_debits_balance_and_keeps_plaintext_out_of_dat
 }
 
 #[tokio::test]
+async fn purchase_reads_current_database_product_and_increments_sales_atomically() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database_url = sqlite_url(&temporary.path().join("purchase-db-product.db"));
+    let pool = demo0::db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let buyer = create_buyer_with_balance(&pool, "purchase_db_product", 100).await;
+    let product = test_database_product("database-token");
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
+
+    let outcome = shop::purchase(
+        &pool,
+        &buyer,
+        &product.id,
+        "01K2H7V9W4RRDMC0P9A8C5P101",
+        &config.currency,
+        timestamp(CREATED_AT),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, shop::PurchaseOutcome::Created(_)));
+    assert_eq!(user_balance(&pool, &buyer.id).await, 90);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT sold_count FROM shop_products WHERE id = ?")
+            .bind(&product.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    let order = store::find_order_by_purchase_key(&pool, "01K2H7V9W4RRDMC0P9A8C5P101")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order.product_name, product.name);
+    assert_eq!(order.icon_file, product.icon_storage_name);
+}
+
+#[tokio::test]
+async fn purchase_rejects_sold_out_database_product_before_debiting_currency() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database_url = sqlite_url(&temporary.path().join("purchase-sold-out.db"));
+    let pool = demo0::db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let buyer = create_buyer_with_balance(&pool, "purchase_sold_out", 100).await;
+    let mut product = test_database_product("sold-out-database-token");
+    product.total_limit = Some(1);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
+
+    let first = shop::purchase(
+        &pool,
+        &buyer,
+        &product.id,
+        "01K2H7V9W4RRDMC0P9A8C5P102",
+        &config.currency,
+        timestamp(CREATED_AT),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(first, shop::PurchaseOutcome::Created(_)));
+    let second = shop::purchase(
+        &pool,
+        &buyer,
+        &product.id,
+        "01K2H7V9W4RRDMC0P9A8C5P103",
+        &config.currency,
+        timestamp(CREATED_AT),
+    )
+    .await
+    .unwrap_err();
+    assert!(second.to_string().contains("售罄"));
+    assert_eq!(user_balance(&pool, &buyer.id).await, 90);
+    assert_eq!(table_count(&pool, "shop_orders").await, 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT sold_count FROM shop_products WHERE id = ?")
+            .bind(&product.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn product_sales_increment_is_unlimited_for_null_limit_and_rolls_back_with_transaction() {
+    let temporary = tempfile::tempdir().unwrap();
+    let pool = demo0::db::connect(&sqlite_url(&temporary.path().join("sales-update.db")))
+        .await
+        .unwrap();
+    let actor = auth::create_user(
+        &pool,
+        "sales_update_actor",
+        "销量更新操作者",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let product = test_database_product("unlimited-sales");
+    store::insert_product(&pool, &product, &actor.id, CREATED_AT)
+        .await
+        .unwrap();
+
+    let mut transaction = pool.begin().await.unwrap();
+    assert!(
+        store::increment_product_sales_if_available(&mut transaction, &product.id)
+            .await
+            .unwrap()
+    );
+    transaction.rollback().await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT sold_count FROM shop_products WHERE id = ?")
+            .bind(&product.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn purchase_returns_already_processed_for_duplicate_key_without_second_debit_or_token() {
     let temporary = tempfile::tempdir().unwrap();
     let database_url = sqlite_url(&temporary.path().join("purchase-idempotent.db"));
@@ -542,12 +676,15 @@ async fn purchase_returns_already_processed_for_duplicate_key_without_second_deb
     let config = test_config(&temporary, database_url);
     let buyer = create_buyer_with_balance(&pool, "purchase_idempotent", 100).await;
     let product = test_product("idempotent-token", 25, None, 2);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
     let purchase_key = "01K2H7V9W4RRDMC0P9A8C5P002";
 
     let first = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         purchase_key,
         &config.currency,
         timestamp(CREATED_AT),
@@ -558,7 +695,7 @@ async fn purchase_returns_already_processed_for_duplicate_key_without_second_deb
     let second = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         purchase_key,
         &config.currency,
         timestamp(CREATED_AT),
@@ -581,12 +718,15 @@ async fn purchase_rejects_active_limit_but_excludes_expired_vouchers() {
     let config = test_config(&temporary, database_url);
     let buyer = create_buyer_with_balance(&pool, "purchase_limit", 100).await;
     let product = test_product("limited-token", 25, Some(1), 1);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
     let now = timestamp(CREATED_AT);
 
     let first = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         "01K2H7V9W4RRDMC0P9A8C5P003",
         &config.currency,
         now,
@@ -599,7 +739,7 @@ async fn purchase_rejects_active_limit_but_excludes_expired_vouchers() {
     let limited = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         "01K2H7V9W4RRDMC0P9A8C5P004",
         &config.currency,
         now,
@@ -618,7 +758,7 @@ async fn purchase_rejects_active_limit_but_excludes_expired_vouchers() {
     let after_expiry = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         "01K2H7V9W4RRDMC0P9A8C5P005",
         &config.currency,
         now,
@@ -640,11 +780,14 @@ async fn purchase_rejects_insufficient_balance_without_creating_records() {
     let config = test_config(&temporary, database_url);
     let buyer = create_buyer_with_balance(&pool, "purchase_balance", 24).await;
     let product = test_product("costly-token", 25, None, 1);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
 
     let error = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         "01K2H7V9W4RRDMC0P9A8C5P006",
         &config.currency,
         timestamp(CREATED_AT),
@@ -667,6 +810,9 @@ async fn purchase_rolls_back_order_and_debit_when_voucher_insert_fails() {
     let config = test_config(&temporary, database_url);
     let buyer = create_buyer_with_balance(&pool, "purchase_rollback", 100).await;
     let product = test_product("rollback-token", 25, None, 1);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
     sqlx::query(
         "CREATE TRIGGER fail_voucher_insert BEFORE INSERT ON redemption_vouchers BEGIN SELECT RAISE(ABORT, 'forced voucher failure'); END",
     )
@@ -678,7 +824,7 @@ async fn purchase_rolls_back_order_and_debit_when_voucher_insert_fails() {
         shop::purchase(
             &pool,
             &buyer,
-            &product,
+            &product.id,
             "01K2H7V9W4RRDMC0P9A8C5P007",
             &config.currency,
             timestamp(CREATED_AT),
@@ -690,6 +836,14 @@ async fn purchase_rolls_back_order_and_debit_when_voucher_insert_fails() {
     assert_eq!(table_count(&pool, "shop_orders").await, 0);
     assert_eq!(table_count(&pool, "redemption_vouchers").await, 0);
     assert_eq!(table_count(&pool, "currency_logs").await, 0);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT sold_count FROM shop_products WHERE id = ?")
+            .bind(&product.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
 }
 
 async fn insert_test_voucher(
@@ -768,16 +922,17 @@ fn test_product(
     price: i64,
     valid_days: Option<i64>,
     max_active_per_user: i64,
-) -> ShopProduct {
-    ShopProduct {
+) -> store::NewProduct {
+    store::NewProduct {
         id: id.to_owned(),
         name: "兑换码商品".to_owned(),
         description: "购买时写入的商品快照".to_owned(),
-        icon_file: "token.png".to_owned(),
+        icon_storage_name: "01K2H7V9W4RRDMC0P9A8C5I001.webp".to_owned(),
+        icon_media_type: "image/webp".to_owned(),
         price,
         valid_days,
         max_active_per_user,
-        enabled: true,
+        total_limit: None,
         sort_order: 1,
     }
 }
@@ -886,7 +1041,6 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
         },
         shop: ShopConfig {
             enabled: true,
-            products_file: temporary.path().join("shop.toml"),
             icon_dir: temporary.path().join("shop-icons"),
             page_size: 12,
             voucher_page_size: 20,
@@ -899,9 +1053,6 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             icon_max_decoded_pixels: 80_000_000,
             icon_max_stored_bytes: 1024 * 1024,
             icon_resize_dimensions: vec![512, 384, 256],
-            icon_max_bytes: 256 * 1024,
-            icon_max_dimension: 1024,
-            products: Vec::new(),
         },
     }
 }
@@ -1469,52 +1620,6 @@ impl ShopFixture {
         config.shop.voucher_page_size = 2;
         config.shop.enabled = shop_enabled;
         config.shop.token_lookup_max_attempts = token_lookup_max_attempts;
-        config.shop.products = vec![
-            ShopProduct {
-                id: "milk_tea".to_owned(),
-                name: "奶茶兑换码".to_owned(),
-                description: "一杯奶茶的兑换凭证".to_owned(),
-                icon_file: "milk-tea.png".to_owned(),
-                price: 50,
-                valid_days: Some(30),
-                max_active_per_user: 1,
-                enabled: true,
-                sort_order: 1,
-            },
-            ShopProduct {
-                id: "gift_card".to_owned(),
-                name: "礼品卡兑换码".to_owned(),
-                description: "可重复购买的礼品卡凭证".to_owned(),
-                icon_file: "gift-card.png".to_owned(),
-                price: 10,
-                valid_days: None,
-                max_active_per_user: 5,
-                enabled: true,
-                sort_order: 2,
-            },
-            ShopProduct {
-                id: "tea_coupon".to_owned(),
-                name: "茶饮兑换码".to_owned(),
-                description: "另一种可兑换的茶饮凭证".to_owned(),
-                icon_file: "tea-coupon.png".to_owned(),
-                price: 10,
-                valid_days: None,
-                max_active_per_user: 1,
-                enabled: true,
-                sort_order: 3,
-            },
-            ShopProduct {
-                id: "sold_out".to_owned(),
-                name: "已下架商品".to_owned(),
-                description: "不应允许购买".to_owned(),
-                icon_file: "gift-card.png".to_owned(),
-                price: 10,
-                valid_days: None,
-                max_active_per_user: 1,
-                enabled: false,
-                sort_order: 4,
-            },
-        ];
         let buyer = auth::create_user(
             &pool,
             "shop_buyer",
@@ -1542,6 +1647,83 @@ impl ShopFixture {
         )
         .await
         .unwrap();
+        for (
+            id,
+            name,
+            description,
+            icon_file,
+            price,
+            valid_days,
+            max_active_per_user,
+            enabled,
+            sort_order,
+        ) in [
+            (
+                "milk_tea",
+                "奶茶兑换码",
+                "一杯奶茶的兑换凭证",
+                "milk-tea.png",
+                50,
+                Some(30),
+                1,
+                true,
+                1,
+            ),
+            (
+                "gift_card",
+                "礼品卡兑换码",
+                "可重复购买的礼品卡凭证",
+                "gift-card.png",
+                10,
+                None,
+                5,
+                true,
+                2,
+            ),
+            (
+                "tea_coupon",
+                "茶饮兑换码",
+                "另一种可兑换的茶饮凭证",
+                "tea-coupon.png",
+                10,
+                None,
+                1,
+                true,
+                3,
+            ),
+            (
+                "sold_out",
+                "已下架商品",
+                "不应允许购买",
+                "gift-card.png",
+                10,
+                None,
+                1,
+                false,
+                4,
+            ),
+        ] {
+            sqlx::query(
+                "INSERT INTO shop_products (id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(name)
+            .bind(description)
+            .bind(icon_file)
+            .bind("image/png")
+            .bind(price)
+            .bind(valid_days)
+            .bind(max_active_per_user)
+            .bind(enabled)
+            .bind(sort_order)
+            .bind(&super_admin.id)
+            .bind(&super_admin.id)
+            .bind(CREATED_AT)
+            .bind(CREATED_AT)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
         let router = demo0::app::build(pool.clone(), config);
         Self {
             temporary,

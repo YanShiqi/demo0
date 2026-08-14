@@ -486,7 +486,7 @@ pub enum PurchaseOutcome {
 pub async fn purchase(
     pool: &SqlitePool,
     user: &User,
-    product: &catalog::ShopProduct,
+    product_id: &str,
     purchase_key: &str,
     _currency_config: &CurrencyConfig,
     now: OffsetDateTime,
@@ -499,9 +499,16 @@ pub async fn purchase(
     if let Some(existing) =
         store::find_order_by_purchase_key_in_transaction(&mut transaction, purchase_key).await?
     {
-        ensure_same_request(&existing, &user.id, &product.id)?;
+        ensure_same_request(&existing, &user.id, product_id)?;
         transaction.commit().await?;
         return Ok(PurchaseOutcome::AlreadyProcessed);
+    }
+
+    let product = store::find_product_in_transaction(&mut transaction, product_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if !product.enabled {
+        return Err(AppError::NotFound);
     }
 
     let now_string = format_utc(now)?;
@@ -514,6 +521,10 @@ pub async fn purchase(
     .await?;
     ensure_active_limit(active, product.max_active_per_user)?;
 
+    if !store::increment_product_sales_if_available(&mut transaction, &product.id).await? {
+        return Err(AppError::BadRequest("商品已售罄".to_owned()));
+    }
+
     let order_id = Ulid::new().to_string();
     let voucher_id = Ulid::new().to_string();
     let issued = token::issue()?;
@@ -524,7 +535,7 @@ pub async fn purchase(
         product_id: product.id.clone(),
         product_name: product.name.clone(),
         product_description: product.description.clone(),
-        icon_file: product.icon_file.clone(),
+        icon_file: product.icon_storage_name.clone(),
         fulfillment_type: catalog::FULFILLMENT_REDEMPTION_TOKEN.to_owned(),
         price_paid: product.price,
         valid_days: product.valid_days,

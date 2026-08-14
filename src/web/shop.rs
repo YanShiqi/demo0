@@ -781,12 +781,9 @@ pub async fn shop_page(
         Some(user) => store::active_counts_for_user(&state.pool, &user.id, &now_string()?).await?,
         None => Default::default(),
     };
-    let products: Vec<ShopProductView> = state
-        .config
-        .shop
-        .products
+    let database_products = store::list_enabled_products(&state.pool).await?;
+    let products: Vec<ShopProductView> = database_products
         .iter()
-        .filter(|product| product.enabled)
         .map(|product| shop_product_view(product, user.as_ref(), &active_counts))
         .collect();
     let total_pages = page_count(products.len(), state.config.shop.page_size)?;
@@ -826,14 +823,10 @@ pub async fn purchase_product(
     let session = auth::require_session(&state.pool, &headers).await?;
     auth::verify_csrf(&session, &form.csrf_token)?;
     let user = require_user(&state, &session).await?;
-    let product = catalog::find_product(&state.config.shop.products, &product_id)
-        .filter(|product| product.enabled)
-        .ok_or(AppError::NotFound)?;
-
     match shop::purchase(
         &state.pool,
         &user,
-        product,
+        &product_id,
         &form.purchase_key,
         &state.config.currency,
         OffsetDateTime::now_utc(),
@@ -845,10 +838,13 @@ pub async fn purchase_product(
             let refreshed_user = auth::find_user_by_id(&state.pool, &user.id)
                 .await?
                 .ok_or(AppError::NotFound)?;
+            let order = store::find_order_by_purchase_key(&state.pool, &form.purchase_key)
+                .await?
+                .ok_or(AppError::NotFound)?;
             let mut response = render(
                 VoucherRevealTemplate {
                     ctx: page_context_for_user(&state, session.csrf_token, &refreshed_user).await?,
-                    product_name: product.name.clone(),
+                    product_name: order.product_name,
                     plaintext_token: voucher.plaintext_token,
                     has_expiration: voucher.expires_at.is_some(),
                     expires_at: voucher
@@ -1001,13 +997,20 @@ fn ensure_shop_enabled(state: &AppState) -> Result<(), AppError> {
 }
 
 fn shop_product_view(
-    product: &catalog::ShopProduct,
+    product: &store::ProductRow,
     user: Option<&crate::model::User>,
     active_counts: &std::collections::HashMap<String, i64>,
 ) -> ShopProductView {
     let active = active_counts.get(&product.id).copied().unwrap_or_default();
     let disabled_reason = match user {
         None => "请先登录后购买".to_owned(),
+        Some(_)
+            if product
+                .total_limit
+                .is_some_and(|limit| product.sold_count >= limit) =>
+        {
+            "商品已售罄".to_owned()
+        }
         Some(_) if active >= product.max_active_per_user => "有效兑换码持有数量已达上限".to_owned(),
         Some(user) if user.currency_balance < product.price => "余额不足".to_owned(),
         Some(_) => String::new(),
@@ -1016,7 +1019,7 @@ fn shop_product_view(
         id: product.id.clone(),
         name: product.name.clone(),
         description: product.description.clone(),
-        icon_url: icon_url(&product.icon_file),
+        icon_url: icon_url(&product.icon_storage_name),
         price: product.price,
         valid_days_label: product
             .valid_days

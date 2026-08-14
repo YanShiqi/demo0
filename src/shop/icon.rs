@@ -393,7 +393,6 @@ mod tests {
     fn test_config() -> ShopConfig {
         ShopConfig {
             enabled: true,
-            products_file: PathBuf::from("content/shop.toml"),
             icon_dir: PathBuf::from("data/shop/product-icons"),
             page_size: 12,
             voucher_page_size: 20,
@@ -406,9 +405,6 @@ mod tests {
             icon_max_decoded_pixels: 80_000_000,
             icon_max_stored_bytes: 1024 * 1024,
             icon_resize_dimensions: vec![512, 384, 256],
-            icon_max_bytes: 256 * 1024,
-            icon_max_dimension: 1024,
-            products: Vec::new(),
         }
     }
 

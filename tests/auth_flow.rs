@@ -3058,7 +3058,6 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
         },
         shop: ShopConfig {
             enabled: true,
-            products_file: temporary.path().join("shop.toml"),
             icon_dir: temporary.path().join("shop-icons"),
             page_size: 12,
             voucher_page_size: 20,
@@ -3071,9 +3070,6 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             icon_max_decoded_pixels: 80_000_000,
             icon_max_stored_bytes: 1024 * 1024,
             icon_resize_dimensions: vec![512, 384, 256],
-            icon_max_bytes: 256 * 1024,
-            icon_max_dimension: 1024,
-            products: Vec::new(),
         },
         updates: UpdateConfig {
             file: temporary.path().join("updates.toml"),

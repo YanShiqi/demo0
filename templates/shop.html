@@ -15,7 +15,7 @@
 <section class="shop-grid" aria-label="可兑换商品">
   {% for product in products %}
   <article class="shop-product-card">
-    <img class="shop-product-icon" src="{{ product.icon_url }}" alt="{{ product.name }} 图标">
+    <img class="shop-product-icon" src="{{ product.icon_url }}" alt="{{ product.name }} 图标" loading="lazy">
     <div class="shop-product-copy">
       <h2>{{ product.name }}</h2>
       <p>{{ product.description }}</p>

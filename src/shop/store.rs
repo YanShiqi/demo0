@@ -227,6 +227,21 @@ pub async fn find_product_in_transaction(
     .await?)
 }
 
+/// 在购买事务中按商品状态和全站余量原子增加销量；NULL 限售表示不限售。
+pub async fn increment_product_sales_if_available(
+    transaction: &mut Transaction<'_, Sqlite>,
+    product_id: &str,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE shop_products SET sold_count = sold_count + 1 WHERE id = ? AND enabled = ? AND (total_limit IS NULL OR sold_count < total_limit)",
+    )
+    .bind(product_id)
+    .bind(true)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 /// 新建商品；时间由 Rust 生成后绑定，避免业务 SQL 依赖数据库时钟。
 pub async fn insert_product(
     pool: &SqlitePool,
