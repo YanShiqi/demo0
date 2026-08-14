@@ -274,13 +274,14 @@ pub async fn delete_product(
         ),
     )
     .await?;
-    let Some(deleted_icon_storage_name) =
-        store::delete_product_in_transaction(&mut transaction, product_id).await?
-    else {
+    let deleted = store::delete_product_in_transaction(&mut transaction, product_id).await?;
+    if !deleted {
         return Err(AppError::BadRequest(
             "商品已被其他管理操作更新，或已有历史订单；请刷新后重试".to_owned(),
         ));
-    };
+    }
+    // 删除条件与快照读取位于同一事务，提交成功后可安全清理该快照中的图标。
+    let deleted_icon_storage_name = current.icon_storage_name;
     transaction.commit().await?;
     Ok(deleted_icon_storage_name)
 }

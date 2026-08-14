@@ -401,14 +401,15 @@ pub async fn delete_product(pool: &SqlitePool, product_id: &str) -> Result<bool,
 pub async fn delete_product_in_transaction(
     transaction: &mut Transaction<'_, Sqlite>,
     product_id: &str,
-) -> Result<Option<String>, AppError> {
-    Ok(sqlx::query_scalar::<_, String>(
-        "DELETE FROM shop_products WHERE id = ? AND NOT EXISTS (SELECT 1 FROM shop_orders WHERE product_id = ?) RETURNING icon_storage_name",
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "DELETE FROM shop_products WHERE id = ? AND NOT EXISTS (SELECT 1 FROM shop_orders WHERE product_id = ?)",
     )
     .bind(product_id)
     .bind(product_id)
-    .fetch_optional(&mut **transaction)
-    .await?)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() == 1)
 }
 
 /// 判断图标是否仍被当前商品或历史订单快照引用。

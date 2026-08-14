@@ -283,6 +283,40 @@ async fn shop_product_persistence_lists_updates_and_retains_deleted_audit_histor
 }
 
 #[tokio::test]
+async fn transactional_product_delete_uses_affected_rows_and_preserves_icon_snapshot() {
+    let temporary = tempfile::tempdir().unwrap();
+    let pool = demo0::db::connect(&sqlite_url(&temporary.path().join("transaction-delete.db")))
+        .await
+        .unwrap();
+    let actor = auth::create_user(
+        &pool,
+        "transaction_delete_actor",
+        "事务删除操作者",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let product = test_database_product("transaction_delete");
+    store::insert_product(&pool, &product, &actor.id, CREATED_AT)
+        .await
+        .unwrap();
+
+    let mut transaction = pool.begin().await.unwrap();
+    let deleted = store::delete_product_in_transaction(&mut transaction, &product.id)
+        .await
+        .unwrap();
+    assert!(deleted);
+    transaction.commit().await.unwrap();
+    assert!(
+        store::find_product(&pool, &product.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn store_user_voucher_page_does_not_include_another_users_order() {
     let temporary = tempfile::tempdir().unwrap();
     let database_url = sqlite_url(&temporary.path().join("store-page.db"));
