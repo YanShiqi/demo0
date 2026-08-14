@@ -423,9 +423,55 @@ pub struct ShopProductView {
     pub price: i64,
     pub valid_days_label: String,
     pub max_active_per_user: i64,
+    pub stock_label: String,
     pub purchase_key: String,
     pub can_purchase: bool,
     pub disabled_reason: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct AdminShopProductView {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub icon_url: String,
+    pub price: i64,
+    pub valid_days_label: String,
+    pub max_active_per_user: i64,
+    pub total_limit_label: String,
+    pub sold_count: i64,
+    pub sort_order: i64,
+    pub enabled: bool,
+    pub can_delete: bool,
+}
+
+#[derive(Template)]
+#[template(path = "admin_shop_products.html")]
+pub struct AdminShopProductsTemplate {
+    pub ctx: PageContext,
+    pub products: Vec<AdminShopProductView>,
+    pub has_products: bool,
+    pub message: String,
+    pub has_message: bool,
+}
+
+#[derive(Template)]
+#[template(path = "admin_shop_product_form.html")]
+pub struct AdminShopProductFormTemplate {
+    pub ctx: PageContext,
+    pub is_edit: bool,
+    pub product_id: String,
+    pub name: String,
+    pub description: String,
+    pub price: String,
+    pub valid_days: String,
+    pub max_active_per_user: String,
+    pub total_limit: String,
+    pub sort_order: String,
+    pub icon_url: String,
+    pub has_icon: bool,
+    pub error: String,
+    pub has_error: bool,
 }
 
 #[derive(Template)]

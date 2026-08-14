@@ -375,6 +375,7 @@ dependencies = [
  "base64",
  "cookie",
  "dotenvy",
+ "gif",
  "hex",
  "http-body-util",
  "image",

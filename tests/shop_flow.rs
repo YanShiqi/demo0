@@ -13,7 +13,7 @@ use demo0::{
         NovelConfig, ShopConfig, UpdateConfig,
     },
     model::Role,
-    shop::{self, catalog::ShopProduct, store},
+    shop::{self, store},
     updates::UpdateEntry,
 };
 use http_body_util::BodyExt;
@@ -22,9 +22,23 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tower::ServiceExt;
 
 const CREATED_AT: &str = "2026-08-13T12:00:00Z";
+const SHOP_PRODUCT_BOUNDARY: &str = "demo0-product-boundary";
 
 fn sqlite_url(path: &Path) -> String {
     format!("sqlite://{}?mode=rwc", path.display())
+}
+
+#[test]
+fn shop_test_config_provides_runtime_icon_processing_limits() {
+    let temporary = tempfile::tempdir().unwrap();
+    let config = test_config(&temporary, sqlite_url(&temporary.path().join("config.db")));
+
+    assert_eq!(config.shop.icon_upload_max_bytes, 5 * 1024 * 1024);
+    assert_eq!(config.shop.icon_input_max_dimension, 4096);
+    assert_eq!(config.shop.icon_max_gif_frames, 120);
+    assert_eq!(config.shop.icon_max_decoded_pixels, 80_000_000);
+    assert_eq!(config.shop.icon_max_stored_bytes, 1024 * 1024);
+    assert_eq!(config.shop.icon_resize_dimensions, vec![512, 384, 256]);
 }
 
 #[tokio::test]
@@ -44,6 +58,262 @@ async fn shop_migration_creates_order_voucher_and_audit_tables() {
         .unwrap();
         assert_eq!(count, 1, "missing table {table}");
     }
+}
+
+#[tokio::test]
+async fn shop_product_persistence_enforces_required_database_constraints() {
+    let temporary = tempfile::tempdir().unwrap();
+    let pool = demo0::db::connect(&sqlite_url(&temporary.path().join("products.db")))
+        .await
+        .unwrap();
+    let actor = auth::create_user(
+        &pool,
+        "product_actor",
+        "商品操作者",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+
+    let product = test_database_product("milk_tea");
+    store::insert_product(&pool, &product, &actor.id, CREATED_AT)
+        .await
+        .unwrap();
+    let saved = store::find_product(&pool, "milk_tea")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.sold_count, 0);
+    assert_eq!(saved.total_limit, None);
+    assert!(saved.enabled);
+    assert_eq!(saved.icon_storage_name, "01K2H7V9W4RRDMC0P9A8C5I001.webp");
+
+    let duplicate_id = insert_raw_product(
+        &pool,
+        &actor.id,
+        RawProduct {
+            id: "milk_tea",
+            price: 10,
+            valid_days: Some(30),
+            max_active_per_user: 1,
+            total_limit: None,
+            sold_count: 0,
+        },
+    )
+    .await;
+    assert!(duplicate_id.is_err());
+    for (id, price, valid_days, max_active_per_user, total_limit, sold_count) in [
+        ("invalid_price", 0, Some(30), 1, None, 0),
+        ("invalid_valid_days", 10, Some(0), 1, None, 0),
+        ("invalid_personal_limit", 10, Some(30), 0, None, 0),
+        ("invalid_total_limit", 10, Some(30), 1, Some(0), 0),
+        ("invalid_sold_count", 10, Some(30), 1, None, -1),
+        ("invalid_limit_below_sold", 10, Some(30), 1, Some(1), 2),
+    ] {
+        let result = insert_raw_product(
+            &pool,
+            &actor.id,
+            RawProduct {
+                id,
+                price,
+                valid_days,
+                max_active_per_user,
+                total_limit,
+                sold_count,
+            },
+        )
+        .await;
+        assert!(result.is_err(), "database accepted invalid product {id}");
+    }
+}
+
+#[tokio::test]
+async fn shop_product_persistence_rejects_unsafe_or_mismatched_icon_metadata() {
+    let product = test_database_product("icon_validation");
+
+    for (storage_name, media_type) in [
+        (".", "image/webp"),
+        ("..", "image/webp"),
+        ("01K2H7V9W4RRDMC0P9A8C5I001.gif", "image/webp"),
+        ("01K2H7V9W4RRDMC0P9A8C5I001.webp", "image/gif"),
+    ] {
+        let mut invalid = product.clone();
+        invalid.icon_storage_name = storage_name.to_owned();
+        invalid.icon_media_type = media_type.to_owned();
+        assert!(
+            shop::validate_product_values(&invalid, 0).is_err(),
+            "accepted invalid icon metadata {storage_name} / {media_type}"
+        );
+    }
+}
+
+async fn insert_raw_product(
+    pool: &sqlx::SqlitePool,
+    actor_user_id: &str,
+    values: RawProduct<'_>,
+) -> Result<sqlx::sqlite::SqliteQueryResult, sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO shop_products (id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(values.id)
+    .bind("无效价格")
+    .bind("数据库约束应拒绝非正价格。")
+    .bind("01K2H7V9W4RRDMC0P9A8C5I002.webp")
+    .bind("image/webp")
+    .bind(values.price)
+    .bind(values.valid_days)
+    .bind(values.max_active_per_user)
+    .bind(values.total_limit)
+    .bind(values.sold_count)
+    .bind(true)
+    .bind(2_i64)
+    .bind(actor_user_id)
+    .bind(actor_user_id)
+    .bind(CREATED_AT)
+    .bind(CREATED_AT)
+    .execute(pool)
+    .await
+}
+
+struct RawProduct<'a> {
+    id: &'a str,
+    price: i64,
+    valid_days: Option<i64>,
+    max_active_per_user: i64,
+    total_limit: Option<i64>,
+    sold_count: i64,
+}
+
+#[tokio::test]
+async fn shop_product_persistence_lists_updates_and_retains_deleted_audit_history() {
+    let temporary = tempfile::tempdir().unwrap();
+    let pool = demo0::db::connect(&sqlite_url(&temporary.path().join("product-history.db")))
+        .await
+        .unwrap();
+    let actor = auth::create_user(
+        &pool,
+        "product_history_actor",
+        "商品历史操作者",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let product = test_database_product("gift_card");
+
+    shop::validate_product_for_create(&pool, &product)
+        .await
+        .unwrap();
+    store::insert_product(&pool, &product, &actor.id, CREATED_AT)
+        .await
+        .unwrap();
+    store::insert_product_audit(
+        &pool,
+        &store::NewProductAudit {
+            id: "01K2H7V9W4RRDMC0P9A8C5A001".to_owned(),
+            product_id: "gift_card".to_owned(),
+            action: store::PRODUCT_AUDIT_CREATED.to_owned(),
+            actor_user_id: actor.id.clone(),
+            before_snapshot: String::new(),
+            after_snapshot: "{\"name\":\"礼品卡\"}".to_owned(),
+            created_at: CREATED_AT.to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut updated = product.clone();
+    updated.price = 20;
+    updated.total_limit = Some(10);
+    store::update_product(
+        &pool,
+        "gift_card",
+        &updated,
+        &actor.id,
+        "2026-08-14T12:00:00Z",
+    )
+    .await
+    .unwrap();
+    store::set_product_enabled(&pool, "gift_card", false, &actor.id, "2026-08-14T12:00:00Z")
+        .await
+        .unwrap();
+    let enabled = store::list_enabled_products(&pool).await.unwrap();
+    assert!(enabled.is_empty());
+    let admin_products = store::list_admin_products(&pool).await.unwrap();
+    assert_eq!(admin_products.len(), 1);
+    assert_eq!(admin_products[0].price, 20);
+    assert_eq!(admin_products[0].total_limit, Some(10));
+    assert!(!admin_products[0].enabled);
+
+    store::insert_product_audit(
+        &pool,
+        &store::NewProductAudit {
+            id: "01K2H7V9W4RRDMC0P9A8C5A002".to_owned(),
+            product_id: "gift_card".to_owned(),
+            action: store::PRODUCT_AUDIT_DELETED.to_owned(),
+            actor_user_id: actor.id.clone(),
+            before_snapshot: "{\"name\":\"礼品卡\"}".to_owned(),
+            after_snapshot: String::new(),
+            created_at: "2026-08-14T12:01:00Z".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(store::delete_product(&pool, "gift_card").await.unwrap());
+    assert!(
+        store::find_product(&pool, "gift_card")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let audit_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM shop_product_audit_logs WHERE product_id = ?",
+    )
+    .bind("gift_card")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 2);
+
+    let reuse_error = shop::validate_product_for_create(&pool, &product)
+        .await
+        .unwrap_err();
+    assert!(reuse_error.to_string().contains("不可复用"));
+}
+
+#[tokio::test]
+async fn transactional_product_delete_uses_affected_rows_and_preserves_icon_snapshot() {
+    let temporary = tempfile::tempdir().unwrap();
+    let pool = demo0::db::connect(&sqlite_url(&temporary.path().join("transaction-delete.db")))
+        .await
+        .unwrap();
+    let actor = auth::create_user(
+        &pool,
+        "transaction_delete_actor",
+        "事务删除操作者",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let product = test_database_product("transaction_delete");
+    store::insert_product(&pool, &product, &actor.id, CREATED_AT)
+        .await
+        .unwrap();
+
+    let mut transaction = pool.begin().await.unwrap();
+    let deleted = store::delete_product_in_transaction(&mut transaction, &product.id)
+        .await
+        .unwrap();
+    assert!(deleted);
+    transaction.commit().await.unwrap();
+    assert!(
+        store::find_product(&pool, &product.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -221,12 +491,22 @@ async fn purchase_creates_snapshot_debits_balance_and_keeps_plaintext_out_of_dat
     let config = test_config(&temporary, database_url);
     let buyer = create_buyer_with_balance(&pool, "purchase_created", 100).await;
     let product = test_product("snapshot-token", 25, Some(7), 2);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
     let purchase_key = "01K2H7V9W4RRDMC0P9A8C5P001";
     let now = timestamp(CREATED_AT);
 
-    let outcome = shop::purchase(&pool, &buyer, &product, purchase_key, &config.currency, now)
-        .await
-        .unwrap();
+    let outcome = shop::purchase(
+        &pool,
+        &buyer,
+        &product.id,
+        purchase_key,
+        &config.currency,
+        now,
+    )
+    .await
+    .unwrap();
     let shop::PurchaseOutcome::Created(created) = outcome else {
         panic!("expected a newly created purchase");
     };
@@ -265,6 +545,130 @@ async fn purchase_creates_snapshot_debits_balance_and_keeps_plaintext_out_of_dat
 }
 
 #[tokio::test]
+async fn purchase_reads_current_database_product_and_increments_sales_atomically() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database_url = sqlite_url(&temporary.path().join("purchase-db-product.db"));
+    let pool = demo0::db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let buyer = create_buyer_with_balance(&pool, "purchase_db_product", 100).await;
+    let product = test_database_product("database-token");
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
+
+    let outcome = shop::purchase(
+        &pool,
+        &buyer,
+        &product.id,
+        "01K2H7V9W4RRDMC0P9A8C5P101",
+        &config.currency,
+        timestamp(CREATED_AT),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, shop::PurchaseOutcome::Created(_)));
+    assert_eq!(user_balance(&pool, &buyer.id).await, 90);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT sold_count FROM shop_products WHERE id = ?")
+            .bind(&product.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    let order = store::find_order_by_purchase_key(&pool, "01K2H7V9W4RRDMC0P9A8C5P101")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order.product_name, product.name);
+    assert_eq!(order.icon_file, product.icon_storage_name);
+}
+
+#[tokio::test]
+async fn purchase_rejects_sold_out_database_product_before_debiting_currency() {
+    let temporary = tempfile::tempdir().unwrap();
+    let database_url = sqlite_url(&temporary.path().join("purchase-sold-out.db"));
+    let pool = demo0::db::connect(&database_url).await.unwrap();
+    let config = test_config(&temporary, database_url);
+    let buyer = create_buyer_with_balance(&pool, "purchase_sold_out", 100).await;
+    let mut product = test_database_product("sold-out-database-token");
+    product.total_limit = Some(1);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
+
+    let first = shop::purchase(
+        &pool,
+        &buyer,
+        &product.id,
+        "01K2H7V9W4RRDMC0P9A8C5P102",
+        &config.currency,
+        timestamp(CREATED_AT),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(first, shop::PurchaseOutcome::Created(_)));
+    let second = shop::purchase(
+        &pool,
+        &buyer,
+        &product.id,
+        "01K2H7V9W4RRDMC0P9A8C5P103",
+        &config.currency,
+        timestamp(CREATED_AT),
+    )
+    .await
+    .unwrap_err();
+    assert!(second.to_string().contains("售罄"));
+    assert_eq!(user_balance(&pool, &buyer.id).await, 90);
+    assert_eq!(table_count(&pool, "shop_orders").await, 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT sold_count FROM shop_products WHERE id = ?")
+            .bind(&product.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn product_sales_increment_is_unlimited_for_null_limit_and_rolls_back_with_transaction() {
+    let temporary = tempfile::tempdir().unwrap();
+    let pool = demo0::db::connect(&sqlite_url(&temporary.path().join("sales-update.db")))
+        .await
+        .unwrap();
+    let actor = auth::create_user(
+        &pool,
+        "sales_update_actor",
+        "销量更新操作者",
+        "correct horse battery",
+        Role::SuperAdmin,
+    )
+    .await
+    .unwrap();
+    let product = test_database_product("unlimited-sales");
+    store::insert_product(&pool, &product, &actor.id, CREATED_AT)
+        .await
+        .unwrap();
+
+    let mut transaction = pool.begin().await.unwrap();
+    assert!(
+        store::increment_product_sales_if_available(&mut transaction, &product.id)
+            .await
+            .unwrap()
+    );
+    transaction.rollback().await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT sold_count FROM shop_products WHERE id = ?")
+            .bind(&product.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn purchase_returns_already_processed_for_duplicate_key_without_second_debit_or_token() {
     let temporary = tempfile::tempdir().unwrap();
     let database_url = sqlite_url(&temporary.path().join("purchase-idempotent.db"));
@@ -272,12 +676,15 @@ async fn purchase_returns_already_processed_for_duplicate_key_without_second_deb
     let config = test_config(&temporary, database_url);
     let buyer = create_buyer_with_balance(&pool, "purchase_idempotent", 100).await;
     let product = test_product("idempotent-token", 25, None, 2);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
     let purchase_key = "01K2H7V9W4RRDMC0P9A8C5P002";
 
     let first = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         purchase_key,
         &config.currency,
         timestamp(CREATED_AT),
@@ -288,7 +695,7 @@ async fn purchase_returns_already_processed_for_duplicate_key_without_second_deb
     let second = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         purchase_key,
         &config.currency,
         timestamp(CREATED_AT),
@@ -311,12 +718,15 @@ async fn purchase_rejects_active_limit_but_excludes_expired_vouchers() {
     let config = test_config(&temporary, database_url);
     let buyer = create_buyer_with_balance(&pool, "purchase_limit", 100).await;
     let product = test_product("limited-token", 25, Some(1), 1);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
     let now = timestamp(CREATED_AT);
 
     let first = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         "01K2H7V9W4RRDMC0P9A8C5P003",
         &config.currency,
         now,
@@ -329,7 +739,7 @@ async fn purchase_rejects_active_limit_but_excludes_expired_vouchers() {
     let limited = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         "01K2H7V9W4RRDMC0P9A8C5P004",
         &config.currency,
         now,
@@ -348,7 +758,7 @@ async fn purchase_rejects_active_limit_but_excludes_expired_vouchers() {
     let after_expiry = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         "01K2H7V9W4RRDMC0P9A8C5P005",
         &config.currency,
         now,
@@ -370,11 +780,14 @@ async fn purchase_rejects_insufficient_balance_without_creating_records() {
     let config = test_config(&temporary, database_url);
     let buyer = create_buyer_with_balance(&pool, "purchase_balance", 24).await;
     let product = test_product("costly-token", 25, None, 1);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
 
     let error = shop::purchase(
         &pool,
         &buyer,
-        &product,
+        &product.id,
         "01K2H7V9W4RRDMC0P9A8C5P006",
         &config.currency,
         timestamp(CREATED_AT),
@@ -397,6 +810,9 @@ async fn purchase_rolls_back_order_and_debit_when_voucher_insert_fails() {
     let config = test_config(&temporary, database_url);
     let buyer = create_buyer_with_balance(&pool, "purchase_rollback", 100).await;
     let product = test_product("rollback-token", 25, None, 1);
+    store::insert_product(&pool, &product, &buyer.id, CREATED_AT)
+        .await
+        .unwrap();
     sqlx::query(
         "CREATE TRIGGER fail_voucher_insert BEFORE INSERT ON redemption_vouchers BEGIN SELECT RAISE(ABORT, 'forced voucher failure'); END",
     )
@@ -408,7 +824,7 @@ async fn purchase_rolls_back_order_and_debit_when_voucher_insert_fails() {
         shop::purchase(
             &pool,
             &buyer,
-            &product,
+            &product.id,
             "01K2H7V9W4RRDMC0P9A8C5P007",
             &config.currency,
             timestamp(CREATED_AT),
@@ -420,6 +836,14 @@ async fn purchase_rolls_back_order_and_debit_when_voucher_insert_fails() {
     assert_eq!(table_count(&pool, "shop_orders").await, 0);
     assert_eq!(table_count(&pool, "redemption_vouchers").await, 0);
     assert_eq!(table_count(&pool, "currency_logs").await, 0);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT sold_count FROM shop_products WHERE id = ?")
+            .bind(&product.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
 }
 
 async fn insert_test_voucher(
@@ -498,16 +922,17 @@ fn test_product(
     price: i64,
     valid_days: Option<i64>,
     max_active_per_user: i64,
-) -> ShopProduct {
-    ShopProduct {
+) -> store::NewProduct {
+    store::NewProduct {
         id: id.to_owned(),
         name: "兑换码商品".to_owned(),
         description: "购买时写入的商品快照".to_owned(),
-        icon_file: "token.png".to_owned(),
+        icon_storage_name: "01K2H7V9W4RRDMC0P9A8C5I001.webp".to_owned(),
+        icon_media_type: "image/webp".to_owned(),
         price,
         valid_days,
         max_active_per_user,
-        enabled: true,
+        total_limit: None,
         sort_order: 1,
     }
 }
@@ -537,6 +962,21 @@ fn create_test_icon(icon_dir: &Path) {
     image::DynamicImage::new_rgba8(2, 2)
         .save(icon_dir.join("token.png"))
         .unwrap();
+}
+
+fn test_database_product(id: &str) -> store::NewProduct {
+    store::NewProduct {
+        id: id.to_owned(),
+        name: "礼品卡".to_owned(),
+        description: "可用于线下兑换的礼品卡。".to_owned(),
+        icon_storage_name: "01K2H7V9W4RRDMC0P9A8C5I001.webp".to_owned(),
+        icon_media_type: "image/webp".to_owned(),
+        price: 10,
+        valid_days: Some(30),
+        max_active_per_user: 2,
+        total_limit: None,
+        sort_order: 1,
+    }
 }
 
 fn test_config(temporary: &TempDir, database_url: String) -> Config {
@@ -601,16 +1041,18 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
         },
         shop: ShopConfig {
             enabled: true,
-            products_file: temporary.path().join("shop.toml"),
             icon_dir: temporary.path().join("shop-icons"),
             page_size: 12,
             voucher_page_size: 20,
             admin_note_max_length: 200,
             token_lookup_max_attempts: 20,
             token_lookup_window_seconds: 60,
-            icon_max_bytes: 256 * 1024,
-            icon_max_dimension: 1024,
-            products: Vec::new(),
+            icon_upload_max_bytes: 5 * 1024 * 1024,
+            icon_input_max_dimension: 4096,
+            icon_max_gif_frames: 120,
+            icon_max_decoded_pixels: 80_000_000,
+            icon_max_stored_bytes: 1024 * 1024,
+            icon_resize_dimensions: vec![512, 384, 256],
         },
     }
 }
@@ -698,7 +1140,7 @@ async fn player_catalog_marks_insufficient_balance_and_active_limit_as_disabled(
 }
 
 #[tokio::test]
-async fn player_rejects_unknown_or_disabled_products_and_serves_safe_icons() {
+async fn player_rejects_unknown_or_disabled_products_and_legacy_icon_names() {
     let fixture = ShopFixture::new().await;
     fixture.grant_buyer_currency(50).await;
     let (cookie, csrf) = fixture.sign_in_buyer().await;
@@ -710,16 +1152,10 @@ async fn player_rejects_unknown_or_disabled_products_and_serves_safe_icons() {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
-    let icon = fixture
+    let legacy_icon = fixture
         .get("/static/shop/products/milk-tea.png", None)
         .await;
-    assert_eq!(icon.status(), StatusCode::OK);
-    assert_eq!(icon.headers()[header::CONTENT_TYPE], "image/png");
-    assert_eq!(icon.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
-    assert_eq!(
-        icon.headers()[header::CACHE_CONTROL],
-        "public, max-age=86400"
-    );
+    assert_eq!(legacy_icon.status(), StatusCode::NOT_FOUND);
     let unsafe_icon = fixture
         .get("/static/shop/products/../milk-tea.png", None)
         .await;
@@ -727,7 +1163,40 @@ async fn player_rejects_unknown_or_disabled_products_and_serves_safe_icons() {
 }
 
 #[tokio::test]
-async fn disabled_shop_hides_pages_but_keeps_historical_icons_available() {
+async fn product_icon_route_requires_database_reference_and_uses_immutable_gif_cache() {
+    let fixture = ShopFixture::new().await;
+    let generated_name = format!("{}.gif", ulid::Ulid::new().to_string().to_lowercase());
+    create_shop_icon(
+        &fixture.temporary.path().join("shop-icons"),
+        &generated_name,
+    );
+
+    // 仅放入存储目录不足以获得访问权限，必须有当前商品或订单快照的数据库引用。
+    let unreferenced = fixture
+        .get(&format!("/static/shop/products/{generated_name}"), None)
+        .await;
+    assert_eq!(unreferenced.status(), StatusCode::NOT_FOUND);
+
+    sqlx::query("UPDATE shop_products SET icon_storage_name = ?, icon_media_type = ? WHERE id = ?")
+        .bind(&generated_name)
+        .bind("image/gif")
+        .bind("milk_tea")
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+    let referenced = fixture
+        .get(&format!("/static/shop/products/{generated_name}"), None)
+        .await;
+    assert_eq!(referenced.status(), StatusCode::OK);
+    assert_eq!(referenced.headers()[header::CONTENT_TYPE], "image/gif");
+    assert_eq!(
+        referenced.headers()[header::CACHE_CONTROL],
+        "public, max-age=31536000, immutable"
+    );
+}
+
+#[tokio::test]
+async fn disabled_shop_hides_pages_and_rejects_legacy_icon_names() {
     let fixture = ShopFixture::new_with_shop_enabled(false).await;
 
     assert_eq!(
@@ -743,7 +1212,7 @@ async fn disabled_shop_hides_pages_but_keeps_historical_icons_available() {
             .get("/static/shop/products/milk-tea.png", None)
             .await
             .status(),
-        StatusCode::OK
+        StatusCode::NOT_FOUND
     );
 }
 
@@ -863,6 +1332,213 @@ async fn admin_voucher_routes_require_super_admin() {
             .await
             .status(),
         StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn admin_shop_routes_require_super_admin_and_csrf() {
+    let fixture = ShopFixture::new().await;
+    assert_eq!(
+        fixture.get("/admin/shop/products", None).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    let buyer_cookie = fixture.sign_in_user(&fixture.buyer.username).await;
+    assert_eq!(
+        fixture
+            .get("/admin/shop/products", Some(&buyer_cookie))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let admin_cookie = fixture.sign_in_user(&fixture.admin.username).await;
+    assert_eq!(
+        fixture
+            .get("/admin/shop/products/new", Some(&admin_cookie))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let super_html = fixture
+        .get_html("/admin/shop/products", &super_cookie)
+        .await;
+    assert!(super_html.contains("商品管理"));
+    for path in [
+        "/admin/shop/products/milk_tea/enable",
+        "/admin/shop/products/milk_tea/disable",
+        "/admin/shop/products/milk_tea/delete",
+    ] {
+        assert_eq!(
+            fixture
+                .post(path, Some(&super_cookie), "csrf_token=invalid")
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+}
+
+#[tokio::test]
+async fn admin_shop_create_invalid_price_rerenders_form_with_submitted_values() {
+    let fixture = ShopFixture::new().await;
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let form_html = fixture
+        .get_html("/admin/shop/products/new", &super_cookie)
+        .await;
+    let csrf = between(&form_html, "name=\"csrf_token\" value=\"", "\"");
+    let upload_dir = fixture.temporary.path().join("upload");
+    create_shop_icon(&upload_dir, "icon.png");
+    let icon_bytes = std::fs::read(upload_dir.join("icon.png")).unwrap();
+    let body = shop_product_multipart_body(
+        csrf,
+        [
+            ("id", "new-product"),
+            ("name", "提交后的商品名"),
+            ("description", "提交后的商品说明"),
+            ("price", "-1"),
+            ("valid_days", ""),
+            ("max_active_per_user", "2"),
+            ("total_limit", ""),
+            ("sort_order", "1"),
+        ],
+        &icon_bytes,
+    );
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/shop/products")
+                .header(header::COOKIE, &super_cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    "multipart/form-data; boundary=demo0-product-boundary",
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let html = response_html(response).await;
+    assert!(html.contains("商品价格必须大于 0"));
+    assert!(html.contains("value=\"new-product\""));
+    assert!(html.contains("value=\"提交后的商品名\""));
+}
+
+#[tokio::test]
+async fn admin_product_edit_updates_public_page_without_changing_order_snapshot() {
+    let fixture = ShopFixture::new().await;
+    fixture.grant_buyer_currency(50).await;
+    let (buyer_cookie, buyer_csrf) = fixture.sign_in_buyer().await;
+    let purchase_key = ulid::Ulid::new().to_string();
+    let purchase = fixture
+        .purchase(&buyer_cookie, &buyer_csrf, "milk_tea", &purchase_key)
+        .await;
+    assert_eq!(purchase.status(), StatusCode::OK);
+
+    let order_before = store::find_order_by_purchase_key(&fixture.pool, &purchase_key)
+        .await
+        .unwrap()
+        .unwrap();
+    let old_icon = order_before.icon_file.clone();
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let admin_html = fixture
+        .get_html("/admin/shop/products", &super_cookie)
+        .await;
+    let csrf = between(&admin_html, "name=\"csrf_token\" value=\"", "\"");
+    let upload_dir = fixture.temporary.path().join("edit-upload");
+    create_shop_icon(&upload_dir, "replacement.png");
+    let icon_bytes = std::fs::read(upload_dir.join("replacement.png")).unwrap();
+    let body = shop_product_multipart_body(
+        csrf,
+        [
+            ("id", "milk_tea"),
+            ("name", "改价后的奶茶"),
+            ("description", "改价后的商品说明"),
+            ("price", "75"),
+            ("valid_days", "30"),
+            ("max_active_per_user", "1"),
+            ("total_limit", ""),
+            ("sort_order", "1"),
+        ],
+        &icon_bytes,
+    );
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/shop/products/milk_tea")
+                .header(header::COOKIE, &super_cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    "multipart/form-data; boundary=demo0-product-boundary",
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let public_html = response_html(fixture.get("/shop", None).await).await;
+    assert!(public_html.contains("改价后的奶茶"));
+    assert!(public_html.contains("改价后的商品说明"));
+    assert!(public_html.contains("75"));
+    let current_product = store::find_product(&fixture.pool, "milk_tea")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(current_product.icon_storage_name, old_icon);
+    assert!(public_html.contains(&current_product.icon_storage_name));
+
+    let order_after = store::find_order_by_purchase_key(&fixture.pool, &purchase_key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order_after.product_name, order_before.product_name);
+    assert_eq!(
+        order_after.product_description,
+        order_before.product_description
+    );
+    assert_eq!(order_after.price_paid, order_before.price_paid);
+    assert_eq!(order_after.icon_file, old_icon);
+}
+
+#[tokio::test]
+async fn purchase_ignores_form_product_and_price_tampering() {
+    let fixture = ShopFixture::new().await;
+    fixture.grant_buyer_currency(50).await;
+    let (buyer_cookie, csrf) = fixture.sign_in_buyer().await;
+    let purchase_key = ulid::Ulid::new().to_string();
+    let response = fixture
+        .post(
+            "/shop/products/milk_tea/purchase",
+            Some(&buyer_cookie),
+            &format!("csrf_token={csrf}&purchase_key={purchase_key}&product_id=gift_card&price=1"),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(user_balance(&fixture.pool, &fixture.buyer.id).await, 0);
+    let order = store::find_order_by_purchase_key(&fixture.pool, &purchase_key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order.product_id, "milk_tea");
+    assert_eq!(order.price_paid, 50);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT sold_count FROM shop_products WHERE id = ?")
+            .bind("milk_tea")
+            .fetch_one(&fixture.pool)
+            .await
+            .unwrap(),
+        1
     );
 }
 
@@ -1083,52 +1759,6 @@ impl ShopFixture {
         config.shop.voucher_page_size = 2;
         config.shop.enabled = shop_enabled;
         config.shop.token_lookup_max_attempts = token_lookup_max_attempts;
-        config.shop.products = vec![
-            ShopProduct {
-                id: "milk_tea".to_owned(),
-                name: "奶茶兑换码".to_owned(),
-                description: "一杯奶茶的兑换凭证".to_owned(),
-                icon_file: "milk-tea.png".to_owned(),
-                price: 50,
-                valid_days: Some(30),
-                max_active_per_user: 1,
-                enabled: true,
-                sort_order: 1,
-            },
-            ShopProduct {
-                id: "gift_card".to_owned(),
-                name: "礼品卡兑换码".to_owned(),
-                description: "可重复购买的礼品卡凭证".to_owned(),
-                icon_file: "gift-card.png".to_owned(),
-                price: 10,
-                valid_days: None,
-                max_active_per_user: 5,
-                enabled: true,
-                sort_order: 2,
-            },
-            ShopProduct {
-                id: "tea_coupon".to_owned(),
-                name: "茶饮兑换码".to_owned(),
-                description: "另一种可兑换的茶饮凭证".to_owned(),
-                icon_file: "tea-coupon.png".to_owned(),
-                price: 10,
-                valid_days: None,
-                max_active_per_user: 1,
-                enabled: true,
-                sort_order: 3,
-            },
-            ShopProduct {
-                id: "sold_out".to_owned(),
-                name: "已下架商品".to_owned(),
-                description: "不应允许购买".to_owned(),
-                icon_file: "gift-card.png".to_owned(),
-                price: 10,
-                valid_days: None,
-                max_active_per_user: 1,
-                enabled: false,
-                sort_order: 4,
-            },
-        ];
         let buyer = auth::create_user(
             &pool,
             "shop_buyer",
@@ -1156,6 +1786,83 @@ impl ShopFixture {
         )
         .await
         .unwrap();
+        for (
+            id,
+            name,
+            description,
+            icon_file,
+            price,
+            valid_days,
+            max_active_per_user,
+            enabled,
+            sort_order,
+        ) in [
+            (
+                "milk_tea",
+                "奶茶兑换码",
+                "一杯奶茶的兑换凭证",
+                "milk-tea.png",
+                50,
+                Some(30),
+                1,
+                true,
+                1,
+            ),
+            (
+                "gift_card",
+                "礼品卡兑换码",
+                "可重复购买的礼品卡凭证",
+                "gift-card.png",
+                10,
+                None,
+                5,
+                true,
+                2,
+            ),
+            (
+                "tea_coupon",
+                "茶饮兑换码",
+                "另一种可兑换的茶饮凭证",
+                "tea-coupon.png",
+                10,
+                None,
+                1,
+                true,
+                3,
+            ),
+            (
+                "sold_out",
+                "已下架商品",
+                "不应允许购买",
+                "gift-card.png",
+                10,
+                None,
+                1,
+                false,
+                4,
+            ),
+        ] {
+            sqlx::query(
+                "INSERT INTO shop_products (id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(name)
+            .bind(description)
+            .bind(icon_file)
+            .bind("image/png")
+            .bind(price)
+            .bind(valid_days)
+            .bind(max_active_per_user)
+            .bind(enabled)
+            .bind(sort_order)
+            .bind(&super_admin.id)
+            .bind(&super_admin.id)
+            .bind(CREATED_AT)
+            .bind(CREATED_AT)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
         let router = demo0::app::build(pool.clone(), config);
         Self {
             temporary,
@@ -1326,6 +2033,34 @@ fn create_shop_icon(icon_dir: &Path, name: &str) {
     image::DynamicImage::new_rgba8(2, 2)
         .save(icon_dir.join(name))
         .unwrap();
+}
+
+fn shop_product_multipart_body<const N: usize>(
+    csrf: &str,
+    fields: [(&str, &str); N],
+    icon_bytes: &[u8],
+) -> Vec<u8> {
+    let mut body = Vec::new();
+    push_shop_product_text_part(&mut body, "csrf_token", csrf);
+    for (name, value) in fields {
+        push_shop_product_text_part(&mut body, name, value);
+    }
+    body.extend_from_slice(format!("--{SHOP_PRODUCT_BOUNDARY}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"icon\"; filename=\"icon.png\"\r\nContent-Type: image/png\r\n\r\n",
+    );
+    body.extend_from_slice(icon_bytes);
+    body.extend_from_slice(format!("\r\n--{SHOP_PRODUCT_BOUNDARY}--\r\n").as_bytes());
+    body
+}
+
+fn push_shop_product_text_part(body: &mut Vec<u8>, name: &str, value: &str) {
+    body.extend_from_slice(format!("--{SHOP_PRODUCT_BOUNDARY}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+    );
+    body.extend_from_slice(value.as_bytes());
+    body.extend_from_slice(b"\r\n");
 }
 
 fn response_cookie(response: &axum::response::Response) -> String {

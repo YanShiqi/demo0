@@ -1364,6 +1364,68 @@ button.danger {
     margin: 18px 0;
 }
 
+.admin-shop-list {
+    display: grid;
+    gap: 16px;
+}
+
+.admin-shop-card {
+    display: flex;
+    gap: 18px;
+    align-items: flex-start;
+    padding: 20px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+}
+
+.admin-shop-card-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.admin-shop-card-main h2 {
+    margin: 0;
+}
+
+.admin-shop-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.product-admin-form {
+    display: grid;
+    gap: 16px;
+}
+
+.product-admin-form textarea {
+    resize: vertical;
+}
+
+.shop-product-preview {
+    width: 128px;
+    height: 128px;
+    object-fit: cover;
+    border-radius: 16px;
+    background: var(--surface-raised);
+    border: 1px solid var(--line);
+}
+
+.status-pill {
+    padding: 4px 9px;
+    color: var(--muted);
+    font-size: 12px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+}
+
+.status-pill.success {
+    color: var(--success);
+    border-color: var(--success);
+}
+
 footer {
     padding: 30px;
     color: var(--muted);

@@ -124,8 +124,8 @@ mod tests {
 
         let entries = load_file(&path).unwrap();
 
-        assert_eq!(entries.first().unwrap().version, "0.1.4");
-        assert_eq!(entries.first().unwrap().title, "商城与兑换凭证");
+        assert_eq!(entries.first().unwrap().version, "0.1.5");
+        assert_eq!(entries.first().unwrap().title, "数据库商品商城管理");
     }
 
     #[test]

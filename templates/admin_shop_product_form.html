@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{% if is_edit %}编辑商品{% else %}新增商品{% endif %} · 牢笼{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">SUPER ADMIN · SHOP</p>
+  <h1>{% if is_edit %}编辑商品{% else %}新增商品{% endif %}</h1>
+  <p class="muted">支持 PNG、JPEG、WebP、GIF；服务器会自动压缩并生成安全文件名。</p>
+</section>
+<section class="form-card wide">
+  {% if has_error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <form id="shop-product-form" class="product-admin-form" action="{% if is_edit %}/admin/shop/products/{{ product_id }}{% else %}/admin/shop/products{% endif %}" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+    <label>商品 ID<input name="id" value="{{ product_id }}" pattern="[a-z0-9_-]+" maxlength="64" {% if is_edit %}readonly{% else %}required{% endif %}><small>仅小写字母、数字、下划线和连字符，创建后不可修改。</small></label>
+    <label>名称<input name="name" value="{{ name }}" maxlength="80" required></label>
+    <label>说明<textarea name="description" maxlength="500" rows="4" required>{{ description }}</textarea></label>
+    <div class="settings-grid">
+      <label>价格<input type="number" name="price" value="{{ price }}" min="1" required></label>
+      <label>每位用户有效码上限<input type="number" name="max_active_per_user" value="{{ max_active_per_user }}" min="1" required></label>
+      <label>有效天数（留空为长期）<input type="number" name="valid_days" value="{{ valid_days }}" min="1"></label>
+      <label>全站限售数量（留空为不限）<input type="number" name="total_limit" value="{{ total_limit }}" min="1"></label>
+      <label>排序<input type="number" name="sort_order" value="{{ sort_order }}" min="0" required></label>
+    </div>
+    <label>商品图标<input id="shop-product-icon" type="file" name="icon" accept="image/png,image/jpeg,image/webp,image/gif">{% if is_edit %}<small>不选择文件则保留当前图标。</small>{% else %}<small>新增商品必须上传图标。</small>{% endif %}</label>
+    {% if has_icon %}<img id="shop-product-preview" class="shop-product-preview" src="{{ icon_url }}" alt="当前商品图标">{% else %}<img id="shop-product-preview" class="shop-product-preview" alt="图标预览" hidden>{% endif %}
+    <button id="shop-product-submit" class="button" type="submit">保存商品</button>
+  </form>
+</section>
+<script>
+  (() => {
+    const input = document.getElementById('shop-product-icon');
+    const preview = document.getElementById('shop-product-preview');
+    const form = document.getElementById('shop-product-form');
+    const submit = document.getElementById('shop-product-submit');
+    let objectUrl;
+    input?.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      objectUrl = URL.createObjectURL(file);
+      preview.src = objectUrl;
+      preview.hidden = false;
+    });
+    form?.addEventListener('submit', () => {
+      submit.disabled = true;
+      submit.textContent = '正在处理图片';
+    });
+  })();
+</script>
+{% endblock %}

@@ -15,7 +15,7 @@
 <section class="shop-grid" aria-label="可兑换商品">
   {% for product in products %}
   <article class="shop-product-card">
-    <img class="shop-product-icon" src="{{ product.icon_url }}" alt="{{ product.name }} 图标">
+    <img class="shop-product-icon" src="{{ product.icon_url }}" alt="{{ product.name }} 图标" loading="lazy">
     <div class="shop-product-copy">
       <h2>{{ product.name }}</h2>
       <p>{{ product.description }}</p>
@@ -23,6 +23,7 @@
         <div><dt>价格</dt><dd>{{ ctx.currency_symbol }} {{ product.price }} {{ ctx.currency_name }}</dd></div>
         <div><dt>有效期</dt><dd>{{ product.valid_days_label }}</dd></div>
         <div><dt>持有上限</dt><dd>{{ product.max_active_per_user }} 枚有效码</dd></div>
+        <div><dt>库存状态</dt><dd>{{ product.stock_label }}</dd></div>
       </dl>
     </div>
     {% if ctx.authenticated %}

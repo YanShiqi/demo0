@@ -109,10 +109,8 @@ reward_amount = 1
 [shop]
 # 是否开启商城；关闭后后续功能不应向普通用户展示兑换入口。
 enabled = true
-# 商品目录 TOML 的路径；新增或调整商品时编辑此文件。
-products_file = "content/shop.toml"
-# 商品图标静态文件目录；图标文件名必须与商品目录中的配置一致。
-icon_dir = "static/shop/products"
+# 数据库商品图标的运行数据目录；目录内容不提交 Git。
+icon_dir = "data/shop/product-icons"
 # 商城商品列表每页展示数量。
 page_size = 12
 # 用户兑换券列表每页展示数量。
@@ -123,7 +121,15 @@ admin_note_max_length = 200
 token_lookup_max_attempts = 20
 # 兑换码查询限流窗口，单位为秒。
 token_lookup_window_seconds = 60
-# 商品图标文件最大体积，单位为字节。
-icon_max_bytes = 262144
-# 商品图标允许的最大宽度或高度，单位为像素。
-icon_max_dimension = 1024
+# 管理端单次图标原始上传最大体积，单位为字节；自动压缩前仍会先执行该限制。
+icon_upload_max_bytes = 5242880
+# 管理端图标原始图片允许的最大宽度或高度，单位为像素。
+icon_input_max_dimension = 4096
+# 管理端 GIF 图标允许的最大帧数；过高会增加处理和播放压力。
+icon_max_gif_frames = 120
+# 管理端 GIF 图标解码后的最大总像素数；用于拦截小体积但解码很重的动图。
+icon_max_decoded_pixels = 80000000
+# 自动处理后图标的最大存储体积，单位为字节；超限会继续尝试更小尺寸。
+icon_max_stored_bytes = 1048576
+# 图标压缩时依次尝试的最大边长，必须严格降序且至少保留一个候选值。
+icon_resize_dimensions = [512, 384, 256]

@@ -1,10 +1,14 @@
 pub mod catalog;
+pub mod icon;
 pub mod store;
 pub mod token;
+
+use std::path::Path;
 
 use sqlx::SqlitePool;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 use ulid::Ulid;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     config::CurrencyConfig,
@@ -12,6 +16,365 @@ use crate::{
     error::AppError,
     model::{Role, User},
 };
+
+const MIN_PRODUCT_ID_LENGTH: usize = 1;
+const MAX_PRODUCT_ID_LENGTH: usize = 64;
+const MIN_PRODUCT_NAME_LENGTH: usize = 1;
+const MAX_PRODUCT_NAME_LENGTH: usize = 80;
+const MIN_PRODUCT_DESCRIPTION_LENGTH: usize = 1;
+const MAX_PRODUCT_DESCRIPTION_LENGTH: usize = 500;
+
+/// 校验新商品的稳定标识和值，并拒绝任何曾经出现在审计中的 ID。
+pub async fn validate_product_for_create(
+    pool: &SqlitePool,
+    product: &store::NewProduct,
+) -> Result<(), AppError> {
+    validate_product_values(product, 0)?;
+    if store::find_product(pool, &product.id).await?.is_some() {
+        return Err(AppError::BadRequest("商品 ID 已存在".to_owned()));
+    }
+    if store::product_id_has_audit_history(pool, &product.id).await? {
+        return Err(AppError::BadRequest(
+            "商品 ID 已使用过，不可复用".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// 校验编辑请求，并使用当前销量约束新的全站限售数量。
+pub async fn validate_product_for_update(
+    pool: &SqlitePool,
+    product_id: &str,
+    product: &store::NewProduct,
+) -> Result<store::ProductRow, AppError> {
+    let current = store::find_product(pool, product_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if product.id != product_id {
+        return Err(AppError::BadRequest("商品 ID 创建后不可修改".to_owned()));
+    }
+    validate_product_values(product, current.sold_count)?;
+    Ok(current)
+}
+
+/// 供创建和编辑共享的字段校验；销量由购买事务维护，不能由表单传入。
+pub fn validate_product_values(
+    product: &store::NewProduct,
+    sold_count: i64,
+) -> Result<(), AppError> {
+    let id_length = product.id.len();
+    if !(MIN_PRODUCT_ID_LENGTH..=MAX_PRODUCT_ID_LENGTH).contains(&id_length)
+        || !product.id.bytes().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, b'_' | b'-')
+        })
+    {
+        return Err(AppError::BadRequest(format!(
+            "商品 ID 必须为 {MIN_PRODUCT_ID_LENGTH}～{MAX_PRODUCT_ID_LENGTH} 个小写字母、数字、下划线或连字符"
+        )));
+    }
+    validate_product_text(
+        "商品名称",
+        &product.name,
+        MIN_PRODUCT_NAME_LENGTH,
+        MAX_PRODUCT_NAME_LENGTH,
+    )?;
+    validate_product_text(
+        "商品说明",
+        &product.description,
+        MIN_PRODUCT_DESCRIPTION_LENGTH,
+        MAX_PRODUCT_DESCRIPTION_LENGTH,
+    )?;
+    if product.price <= 0 {
+        return Err(AppError::BadRequest("商品价格必须大于 0".to_owned()));
+    }
+    if product.max_active_per_user <= 0 {
+        return Err(AppError::BadRequest(
+            "每位用户的有效凭证上限必须大于 0".to_owned(),
+        ));
+    }
+    if product.valid_days.is_some_and(|days| days <= 0) {
+        return Err(AppError::BadRequest("商品有效天数必须大于 0".to_owned()));
+    }
+    if product.total_limit.is_some_and(|limit| limit <= 0) {
+        return Err(AppError::BadRequest("商品限售数量必须大于 0".to_owned()));
+    }
+    if product.total_limit.is_some_and(|limit| limit < sold_count) {
+        return Err(AppError::BadRequest(format!(
+            "商品限售数量不能低于已售数量 {sold_count}"
+        )));
+    }
+    if product.icon_storage_name.trim().is_empty()
+        || product.icon_storage_name != product.icon_storage_name.trim()
+        || product.icon_storage_name.contains(['/', '\\'])
+        || matches!(product.icon_storage_name.as_str(), "." | "..")
+    {
+        return Err(AppError::BadRequest("商品图标存储名无效".to_owned()));
+    }
+    // 存储名由服务端生成；仍需绑定扩展名和可信媒体类型，避免响应头与文件类型脱节。
+    let expected_media_type = match Path::new(&product.icon_storage_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        _ => return Err(AppError::BadRequest("商品图标存储名无效".to_owned())),
+    };
+    if product.icon_media_type != expected_media_type {
+        return Err(AppError::BadRequest("商品图标媒体类型无效".to_owned()));
+    }
+    Ok(())
+}
+
+/// 创建商品并在同一事务中记录完整的管理审计。
+pub async fn create_product(
+    pool: &SqlitePool,
+    actor: &User,
+    product: &store::NewProduct,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    if actor.parsed_role() != Role::SuperAdmin {
+        return Err(AppError::Forbidden);
+    }
+    validate_product_for_create(pool, product).await?;
+    let now = format_utc(now)?;
+    let mut transaction = pool.begin().await?;
+    store::insert_product_in_transaction(&mut transaction, product, &actor.id, &now).await?;
+    store::insert_product_audit_in_transaction(
+        &mut transaction,
+        &new_product_audit(
+            product,
+            actor,
+            store::PRODUCT_AUDIT_CREATED,
+            "",
+            product_snapshot(product),
+            &now,
+        ),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// 更新商品资料；销量和稳定 ID 保留在数据库当前值中，图片名由服务端生成。
+pub async fn update_product(
+    pool: &SqlitePool,
+    actor: &User,
+    product_id: &str,
+    product: &store::NewProduct,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    if actor.parsed_role() != Role::SuperAdmin {
+        return Err(AppError::Forbidden);
+    }
+    let current = validate_product_for_update(pool, product_id, product).await?;
+    let now = format_utc(now)?;
+    let mut transaction = pool.begin().await?;
+    let changed = store::update_product_in_transaction(
+        &mut transaction,
+        product_id,
+        product,
+        &actor.id,
+        &now,
+    )
+    .await?;
+    if !changed {
+        return Err(AppError::NotFound);
+    }
+    store::insert_product_audit_in_transaction(
+        &mut transaction,
+        &new_product_audit(
+            product,
+            actor,
+            store::PRODUCT_AUDIT_UPDATED,
+            product_snapshot(&current),
+            product_snapshot(product),
+            &now,
+        ),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// 切换商品上架状态并写入审计，状态变化立即对后续读取生效。
+pub async fn set_product_enabled(
+    pool: &SqlitePool,
+    actor: &User,
+    product_id: &str,
+    enabled: bool,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    if actor.parsed_role() != Role::SuperAdmin {
+        return Err(AppError::Forbidden);
+    }
+    let current = store::find_product(pool, product_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let now = format_utc(now)?;
+    let mut transaction = pool.begin().await?;
+    let changed = store::set_product_enabled_in_transaction(
+        &mut transaction,
+        product_id,
+        enabled,
+        &actor.id,
+        &now,
+    )
+    .await?;
+    if !changed {
+        return Err(AppError::NotFound);
+    }
+    let action = if enabled {
+        store::PRODUCT_AUDIT_ENABLED
+    } else {
+        store::PRODUCT_AUDIT_DISABLED
+    };
+    store::insert_product_audit_in_transaction(
+        &mut transaction,
+        &new_product_audit(
+            &product_input_from_row(&current),
+            actor,
+            action,
+            product_snapshot(&current),
+            product_snapshot_with_enabled(&current, enabled),
+            &now,
+        ),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// 删除没有历史订单的商品；有订单时保留商品以保证订单快照和审计可追溯。
+pub async fn delete_product(
+    pool: &SqlitePool,
+    actor: &User,
+    product_id: &str,
+    now: OffsetDateTime,
+) -> Result<String, AppError> {
+    if actor.parsed_role() != Role::SuperAdmin {
+        return Err(AppError::Forbidden);
+    }
+    let now = format_utc(now)?;
+    let mut transaction = pool.begin().await?;
+    let current = store::find_product_in_transaction(&mut transaction, product_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    // 先写审计，再尝试删除；失败时整个事务回滚，避免留下虚假的删除记录。
+    store::insert_product_audit_in_transaction(
+        &mut transaction,
+        &new_product_audit(
+            &product_input_from_row(&current),
+            actor,
+            store::PRODUCT_AUDIT_DELETED,
+            product_snapshot(&current),
+            "",
+            &now,
+        ),
+    )
+    .await?;
+    let deleted = store::delete_product_in_transaction(&mut transaction, product_id).await?;
+    if !deleted {
+        return Err(AppError::BadRequest(
+            "商品已被其他管理操作更新，或已有历史订单；请刷新后重试".to_owned(),
+        ));
+    }
+    // 删除条件与快照读取位于同一事务，提交成功后可安全清理该快照中的图标。
+    let deleted_icon_storage_name = current.icon_storage_name;
+    transaction.commit().await?;
+    Ok(deleted_icon_storage_name)
+}
+
+fn new_product_audit(
+    product: &store::NewProduct,
+    actor: &User,
+    action: &str,
+    before_snapshot: impl Into<String>,
+    after_snapshot: impl Into<String>,
+    created_at: &str,
+) -> store::NewProductAudit {
+    store::NewProductAudit {
+        id: Ulid::new().to_string(),
+        product_id: product.id.clone(),
+        action: action.to_owned(),
+        actor_user_id: actor.id.clone(),
+        before_snapshot: before_snapshot.into(),
+        after_snapshot: after_snapshot.into(),
+        created_at: created_at.to_owned(),
+    }
+}
+
+fn product_input_from_row(row: &store::ProductRow) -> store::NewProduct {
+    store::NewProduct {
+        id: row.id.clone(),
+        name: row.name.clone(),
+        description: row.description.clone(),
+        icon_storage_name: row.icon_storage_name.clone(),
+        icon_media_type: row.icon_media_type.clone(),
+        price: row.price,
+        valid_days: row.valid_days,
+        max_active_per_user: row.max_active_per_user,
+        total_limit: row.total_limit,
+        sort_order: row.sort_order,
+    }
+}
+
+fn product_snapshot(product: &impl ProductSnapshot) -> String {
+    product.snapshot(false)
+}
+
+fn product_snapshot_with_enabled(row: &store::ProductRow, enabled: bool) -> String {
+    let input = product_input_from_row(row);
+    format!("{};enabled={enabled}", input.snapshot(false))
+}
+
+trait ProductSnapshot {
+    fn snapshot(&self, enabled: bool) -> String;
+}
+
+impl ProductSnapshot for store::NewProduct {
+    fn snapshot(&self, enabled: bool) -> String {
+        format!(
+            "id={};name={};description={};icon={};media={};price={};valid_days={:?};max_active_per_user={};total_limit={:?};sort_order={};enabled={enabled}",
+            self.id,
+            self.name,
+            self.description,
+            self.icon_storage_name,
+            self.icon_media_type,
+            self.price,
+            self.valid_days,
+            self.max_active_per_user,
+            self.total_limit,
+            self.sort_order
+        )
+    }
+}
+
+impl ProductSnapshot for store::ProductRow {
+    fn snapshot(&self, enabled: bool) -> String {
+        product_input_from_row(self).snapshot(enabled)
+    }
+}
+
+fn validate_product_text(
+    field: &str,
+    value: &str,
+    minimum: usize,
+    maximum: usize,
+) -> Result<(), AppError> {
+    let length = value.graphemes(true).count();
+    if value != value.trim()
+        || value.is_empty()
+        || value.chars().any(char::is_control)
+        || !(minimum..=maximum).contains(&length)
+    {
+        return Err(AppError::BadRequest(format!(
+            "{field}必须为 {minimum}～{maximum} 个可见字符，且不能包含首尾空白或控制字符"
+        )));
+    }
+    Ok(())
+}
 
 /// 以规范化散列查找凭证，整个过程中不保留或记录兑换码明文。
 pub async fn lookup_by_token(
@@ -123,7 +486,7 @@ pub enum PurchaseOutcome {
 pub async fn purchase(
     pool: &SqlitePool,
     user: &User,
-    product: &catalog::ShopProduct,
+    product_id: &str,
     purchase_key: &str,
     _currency_config: &CurrencyConfig,
     now: OffsetDateTime,
@@ -136,9 +499,16 @@ pub async fn purchase(
     if let Some(existing) =
         store::find_order_by_purchase_key_in_transaction(&mut transaction, purchase_key).await?
     {
-        ensure_same_request(&existing, &user.id, &product.id)?;
+        ensure_same_request(&existing, &user.id, product_id)?;
         transaction.commit().await?;
         return Ok(PurchaseOutcome::AlreadyProcessed);
+    }
+
+    let product = store::find_product_in_transaction(&mut transaction, product_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if !product.enabled {
+        return Err(AppError::NotFound);
     }
 
     let now_string = format_utc(now)?;
@@ -151,6 +521,10 @@ pub async fn purchase(
     .await?;
     ensure_active_limit(active, product.max_active_per_user)?;
 
+    if !store::increment_product_sales_if_available(&mut transaction, &product.id).await? {
+        return Err(AppError::BadRequest("商品已售罄".to_owned()));
+    }
+
     let order_id = Ulid::new().to_string();
     let voucher_id = Ulid::new().to_string();
     let issued = token::issue()?;
@@ -161,7 +535,7 @@ pub async fn purchase(
         product_id: product.id.clone(),
         product_name: product.name.clone(),
         product_description: product.description.clone(),
-        icon_file: product.icon_file.clone(),
+        icon_file: product.icon_storage_name.clone(),
         fulfillment_type: catalog::FULFILLMENT_REDEMPTION_TOKEN.to_owned(),
         price_paid: product.price,
         valid_days: product.valid_days,

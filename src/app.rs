@@ -11,12 +11,17 @@ use crate::{
     web,
 };
 
+// multipart 字段与边界会占用额外请求体空间，避免合法文件在解析前被拦截。
+const MULTIPART_FORM_OVERHEAD_BYTES: usize = 128 * 1024;
+
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
     pub config: Arc<Config>,
     pub login_limiter: LoginLimiter,
     pub voucher_lookup_limiter: AttemptLimiter,
+    /// 串行化商品图标文件与商品行的替换/删除，避免清理旧文件时与管理操作竞态。
+    pub product_icon_mutation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub fn build(pool: SqlitePool, config: Config) -> Router {
@@ -25,7 +30,8 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         .max_upload_bytes
         .max(MAX_UPLOAD_BYTES)
         .max(config.novels.chapter_max_upload_bytes)
-        + 128 * 1024;
+        .max(config.shop.icon_upload_max_bytes)
+        + MULTIPART_FORM_OVERHEAD_BYTES;
     let voucher_lookup_limiter = AttemptLimiter::new(
         Duration::from_secs(config.shop.token_lookup_window_seconds),
         config.shop.token_lookup_max_attempts,
@@ -35,6 +41,7 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         config: Arc::new(config),
         login_limiter: LoginLimiter::default(),
         voucher_lookup_limiter,
+        product_icon_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     Router::new()
@@ -60,6 +67,31 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         )
         .route("/vouchers", get(web::voucher_list))
         .route("/admin/vouchers", get(web::admin_vouchers))
+        .route(
+            "/admin/shop/products",
+            get(web::admin_shop_products).post(web::create_admin_shop_product),
+        )
+        .route("/admin/shop/products/new", get(web::admin_shop_product_new))
+        .route(
+            "/admin/shop/products/{id}/edit",
+            get(web::admin_shop_product_edit),
+        )
+        .route(
+            "/admin/shop/products/{id}",
+            axum::routing::post(web::update_admin_shop_product),
+        )
+        .route(
+            "/admin/shop/products/{id}/enable",
+            axum::routing::post(web::enable_admin_shop_product),
+        )
+        .route(
+            "/admin/shop/products/{id}/disable",
+            axum::routing::post(web::disable_admin_shop_product),
+        )
+        .route(
+            "/admin/shop/products/{id}/delete",
+            axum::routing::post(web::delete_admin_shop_product),
+        )
         .route(
             "/admin/vouchers/lookup",
             axum::routing::post(web::lookup_voucher),
