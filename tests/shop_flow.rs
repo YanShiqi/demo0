@@ -1431,6 +1431,118 @@ async fn admin_shop_create_invalid_price_rerenders_form_with_submitted_values() 
 }
 
 #[tokio::test]
+async fn admin_product_edit_updates_public_page_without_changing_order_snapshot() {
+    let fixture = ShopFixture::new().await;
+    fixture.grant_buyer_currency(50).await;
+    let (buyer_cookie, buyer_csrf) = fixture.sign_in_buyer().await;
+    let purchase_key = ulid::Ulid::new().to_string();
+    let purchase = fixture
+        .purchase(&buyer_cookie, &buyer_csrf, "milk_tea", &purchase_key)
+        .await;
+    assert_eq!(purchase.status(), StatusCode::OK);
+
+    let order_before = store::find_order_by_purchase_key(&fixture.pool, &purchase_key)
+        .await
+        .unwrap()
+        .unwrap();
+    let old_icon = order_before.icon_file.clone();
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let admin_html = fixture
+        .get_html("/admin/shop/products", &super_cookie)
+        .await;
+    let csrf = between(&admin_html, "name=\"csrf_token\" value=\"", "\"");
+    let upload_dir = fixture.temporary.path().join("edit-upload");
+    create_shop_icon(&upload_dir, "replacement.png");
+    let icon_bytes = std::fs::read(upload_dir.join("replacement.png")).unwrap();
+    let body = shop_product_multipart_body(
+        csrf,
+        [
+            ("id", "milk_tea"),
+            ("name", "改价后的奶茶"),
+            ("description", "改价后的商品说明"),
+            ("price", "75"),
+            ("valid_days", "30"),
+            ("max_active_per_user", "1"),
+            ("total_limit", ""),
+            ("sort_order", "1"),
+        ],
+        &icon_bytes,
+    );
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/shop/products/milk_tea")
+                .header(header::COOKIE, &super_cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    "multipart/form-data; boundary=demo0-product-boundary",
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let public_html = response_html(fixture.get("/shop", None).await).await;
+    assert!(public_html.contains("改价后的奶茶"));
+    assert!(public_html.contains("改价后的商品说明"));
+    assert!(public_html.contains("75"));
+    let current_product = store::find_product(&fixture.pool, "milk_tea")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(current_product.icon_storage_name, old_icon);
+    assert!(public_html.contains(&current_product.icon_storage_name));
+
+    let order_after = store::find_order_by_purchase_key(&fixture.pool, &purchase_key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order_after.product_name, order_before.product_name);
+    assert_eq!(
+        order_after.product_description,
+        order_before.product_description
+    );
+    assert_eq!(order_after.price_paid, order_before.price_paid);
+    assert_eq!(order_after.icon_file, old_icon);
+}
+
+#[tokio::test]
+async fn purchase_ignores_form_product_and_price_tampering() {
+    let fixture = ShopFixture::new().await;
+    fixture.grant_buyer_currency(50).await;
+    let (buyer_cookie, csrf) = fixture.sign_in_buyer().await;
+    let purchase_key = ulid::Ulid::new().to_string();
+    let response = fixture
+        .post(
+            "/shop/products/milk_tea/purchase",
+            Some(&buyer_cookie),
+            &format!("csrf_token={csrf}&purchase_key={purchase_key}&product_id=gift_card&price=1"),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(user_balance(&fixture.pool, &fixture.buyer.id).await, 0);
+    let order = store::find_order_by_purchase_key(&fixture.pool, &purchase_key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(order.product_id, "milk_tea");
+    assert_eq!(order.price_paid, 50);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT sold_count FROM shop_products WHERE id = ?")
+            .bind("milk_tea")
+            .fetch_one(&fixture.pool)
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn admin_voucher_lookup_normalizes_token_without_changing_status_or_echoing_it() {
     let fixture = ShopFixture::new().await;
     fixture.grant_buyer_currency(50).await;
