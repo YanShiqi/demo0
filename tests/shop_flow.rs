@@ -1072,6 +1072,9 @@ async fn first_purchase_reveals_token_once_and_duplicate_request_does_not() {
     let first_html = response_html(first).await;
     assert!(first_html.contains("请立即复制并妥善保存"));
     assert!(first_html.contains("data-token=\"ZV1-"));
+    assert!(first_html.contains("data-copy-token"));
+    assert!(first_html.contains("document.execCommand(\"copy\")"));
+    assert!(first_html.contains("复制成功，请妥善保存兑换码。"));
 
     let duplicate = fixture
         .purchase(&cookie, &csrf, "milk_tea", &purchase_key)

@@ -7,16 +7,54 @@
   <p class="voucher-warning">请立即复制并妥善保存。离开此页面后，兑换码明文不会再次显示。</p>
   <code class="voucher-token" data-token="{{ plaintext_token }}">{{ plaintext_token }}</code>
   <button class="button" type="button" data-copy-token data-token="{{ plaintext_token }}">复制兑换码</button>
+  <p class="muted" data-copy-feedback aria-live="polite"></p>
   {% if has_expiration %}<p class="muted">有效期至：{{ expires_at }}</p>{% endif %}
   <p><a href="/vouchers">前往我的兑换码</a></p>
 </section>
 <script>
 const copyButton = document.querySelector("[data-copy-token]");
+const copyFeedback = document.querySelector("[data-copy-feedback]");
+
+async function copyText(text) {
+  // HTTPS/安全上下文优先使用现代剪贴板 API；HTTP 内网访问时回退到兼容方案。
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+
+  const fallback = document.createElement("textarea");
+  fallback.value = text;
+  fallback.setAttribute("readonly", "");
+  fallback.style.position = "fixed";
+  fallback.style.opacity = "0";
+  document.body.appendChild(fallback);
+  fallback.select();
+  fallback.setSelectionRange(0, fallback.value.length);
+  try {
+    return document.execCommand("copy");
+  } finally {
+    fallback.remove();
+  }
+}
+
 copyButton?.addEventListener("click", async () => {
   const token = copyButton.dataset.token;
   if (!token) return;
-  await navigator.clipboard.writeText(token);
-  copyButton.textContent = "已复制，请妥善保存";
+  copyButton.disabled = true;
+  copyFeedback.textContent = "正在复制…";
+  try {
+    const copied = await copyText(token);
+    if (copied) {
+      copyButton.textContent = "已复制，请妥善保存";
+      copyFeedback.textContent = "复制成功，请妥善保存兑换码。";
+    } else {
+      copyFeedback.textContent = "复制失败，请手动选择上方兑换码进行复制。";
+    }
+  } catch {
+    copyFeedback.textContent = "复制失败，请手动选择上方兑换码进行复制。";
+  } finally {
+    copyButton.disabled = false;
+  }
 });
 </script>
 {% endblock %}
