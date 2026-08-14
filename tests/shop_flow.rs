@@ -1123,6 +1123,52 @@ async fn admin_voucher_routes_require_super_admin() {
 }
 
 #[tokio::test]
+async fn admin_shop_routes_require_super_admin_and_csrf() {
+    let fixture = ShopFixture::new().await;
+    assert_eq!(
+        fixture.get("/admin/shop/products", None).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    let buyer_cookie = fixture.sign_in_user(&fixture.buyer.username).await;
+    assert_eq!(
+        fixture
+            .get("/admin/shop/products", Some(&buyer_cookie))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let admin_cookie = fixture.sign_in_user(&fixture.admin.username).await;
+    assert_eq!(
+        fixture
+            .get("/admin/shop/products/new", Some(&admin_cookie))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let super_html = fixture
+        .get_html("/admin/shop/products", &super_cookie)
+        .await;
+    assert!(super_html.contains("商品管理"));
+    for path in [
+        "/admin/shop/products/milk_tea/enable",
+        "/admin/shop/products/milk_tea/disable",
+        "/admin/shop/products/milk_tea/delete",
+    ] {
+        assert_eq!(
+            fixture
+                .post(path, Some(&super_cookie), "csrf_token=invalid")
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+}
+
+#[tokio::test]
 async fn admin_voucher_lookup_normalizes_token_without_changing_status_or_echoing_it() {
     let fixture = ShopFixture::new().await;
     fixture.grant_buyer_currency(50).await;

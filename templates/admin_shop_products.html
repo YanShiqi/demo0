@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}商品管理 · 牢笼{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <p class="eyebrow">SUPER ADMIN · SHOP</p>
+  <h1>商品管理</h1>
+  <p class="muted">商品资料修改会立即影响商城；历史订单保留购买时的商品快照。</p>
+  <a class="button" href="/admin/shop/products/new">新增商品</a>
+</section>
+{% if has_message %}<p class="form-success">{{ message }}</p>{% endif %}
+{% if has_products %}
+<section class="admin-shop-list" aria-label="商品列表">
+  {% for product in products %}
+  <article class="admin-shop-card">
+    <img class="shop-product-icon" src="{{ product.icon_url }}" alt="{{ product.name }} 图标" loading="lazy">
+    <div class="admin-shop-card-main">
+      <div class="preview-heading">
+        <div><h2>{{ product.name }}</h2><p class="muted"><code>{{ product.id }}</code> · 排序 {{ product.sort_order }}</p></div>
+        {% if product.enabled %}<span class="status-pill success">已启用</span>{% else %}<span class="status-pill">已禁用</span>{% endif %}
+      </div>
+      <p>{{ product.description }}</p>
+      <dl class="shop-product-meta">
+        <div><dt>价格</dt><dd>{{ product.price }} {{ ctx.currency_name }}</dd></div>
+        <div><dt>有效期</dt><dd>{{ product.valid_days_label }}</dd></div>
+        <div><dt>用户上限</dt><dd>{{ product.max_active_per_user }}</dd></div>
+        <div><dt>全站限售</dt><dd>{{ product.total_limit_label }} · 已售 {{ product.sold_count }}</dd></div>
+      </dl>
+      <div class="admin-shop-actions">
+        <a class="button secondary" href="/admin/shop/products/{{ product.id }}/edit">编辑</a>
+        {% if product.enabled %}
+        <form action="/admin/shop/products/{{ product.id }}/disable" method="post" class="inline-form"><input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}"><button class="small-button secondary" type="submit">禁用</button></form>
+        {% else %}
+        <form action="/admin/shop/products/{{ product.id }}/enable" method="post" class="inline-form"><input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}"><button class="small-button" type="submit">启用</button></form>
+        {% endif %}
+        {% if product.can_delete %}<form action="/admin/shop/products/{{ product.id }}/delete" method="post" class="inline-form"><input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}"><button class="small-button danger" type="submit">删除</button></form>{% else %}<span class="muted">有历史订单，不可删除</span>{% endif %}
+      </div>
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% else %}<p class="empty-state">还没有商品，先新增一个吧。</p>{% endif %}
+{% endblock %}

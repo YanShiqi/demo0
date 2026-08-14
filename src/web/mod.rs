@@ -41,8 +41,10 @@ use views::{
 };
 
 pub use shop::{
-    admin_vouchers, cancel_voucher, lookup_voucher, purchase_product, redeem_voucher, shop_page,
-    shop_product_icon, voucher_list,
+    admin_shop_product_edit, admin_shop_product_new, admin_shop_products, admin_vouchers,
+    cancel_voucher, create_admin_shop_product, delete_admin_shop_product,
+    disable_admin_shop_product, enable_admin_shop_product, lookup_voucher, purchase_product,
+    redeem_voucher, shop_page, shop_product_icon, update_admin_shop_product, voucher_list,
 };
 
 #[derive(Deserialize)]

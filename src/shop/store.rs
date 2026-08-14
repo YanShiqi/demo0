@@ -245,6 +245,37 @@ pub async fn insert_product(
     Ok(())
 }
 
+/// 在商品管理事务中新增商品；审计记录和商品必须一起提交。
+pub async fn insert_product_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    product: &NewProduct,
+    actor_user_id: &str,
+    now: &str,
+) -> Result<(), AppError> {
+    sqlx::query(
+        "INSERT INTO shop_products (id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&product.id)
+    .bind(&product.name)
+    .bind(&product.description)
+    .bind(&product.icon_storage_name)
+    .bind(&product.icon_media_type)
+    .bind(product.price)
+    .bind(product.valid_days)
+    .bind(product.max_active_per_user)
+    .bind(product.total_limit)
+    .bind(0_i64)
+    .bind(true)
+    .bind(product.sort_order)
+    .bind(actor_user_id)
+    .bind(actor_user_id)
+    .bind(now)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
 /// 编辑商品的可变字段；稳定 ID、销量和创建信息不允许通过此接口改写。
 pub async fn update_product(
     pool: &SqlitePool,
@@ -273,6 +304,34 @@ pub async fn update_product(
     Ok(result.rows_affected() == 1)
 }
 
+/// 在商品管理事务中编辑商品，不改写稳定 ID 和销量。
+pub async fn update_product_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    product_id: &str,
+    product: &NewProduct,
+    actor_user_id: &str,
+    now: &str,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE shop_products SET name = ?, description = ?, icon_storage_name = ?, icon_media_type = ?, price = ?, valid_days = ?, max_active_per_user = ?, total_limit = ?, sort_order = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&product.name)
+    .bind(&product.description)
+    .bind(&product.icon_storage_name)
+    .bind(&product.icon_media_type)
+    .bind(product.price)
+    .bind(product.valid_days)
+    .bind(product.max_active_per_user)
+    .bind(product.total_limit)
+    .bind(product.sort_order)
+    .bind(actor_user_id)
+    .bind(now)
+    .bind(product_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 /// 立即切换商品上架状态，商城下一次读取即可看到新状态。
 pub async fn set_product_enabled(
     pool: &SqlitePool,
@@ -293,6 +352,26 @@ pub async fn set_product_enabled(
     Ok(result.rows_affected() == 1)
 }
 
+/// 在商品管理事务中切换上架状态并记录操作者。
+pub async fn set_product_enabled_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    product_id: &str,
+    enabled: bool,
+    actor_user_id: &str,
+    now: &str,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "UPDATE shop_products SET enabled = ?, updated_by_user_id = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(enabled)
+    .bind(actor_user_id)
+    .bind(now)
+    .bind(product_id)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 /// 仅在没有历史订单时删除商品，订单快照仍可通过商品 ID 追溯原来的审计记录。
 pub async fn delete_product(pool: &SqlitePool, product_id: &str) -> Result<bool, AppError> {
     let result = sqlx::query(
@@ -301,6 +380,21 @@ pub async fn delete_product(pool: &SqlitePool, product_id: &str) -> Result<bool,
     .bind(product_id)
     .bind(product_id)
     .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// 在商品管理事务中删除无历史订单的商品，调用方应先写入删除审计。
+pub async fn delete_product_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    product_id: &str,
+) -> Result<bool, AppError> {
+    let result = sqlx::query(
+        "DELETE FROM shop_products WHERE id = ? AND NOT EXISTS (SELECT 1 FROM shop_orders WHERE product_id = ?)",
+    )
+    .bind(product_id)
+    .bind(product_id)
+    .execute(&mut **transaction)
     .await?;
     Ok(result.rows_affected() == 1)
 }
@@ -324,6 +418,29 @@ pub async fn insert_product_audit(
     .bind(&audit.after_snapshot)
     .bind(&audit.created_at)
     .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// 将商品审计写入现有事务，避免商品和审计出现半提交状态。
+pub async fn insert_product_audit_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    audit: &NewProductAudit,
+) -> Result<(), AppError> {
+    if !is_product_audit_action(&audit.action) {
+        return Err(AppError::BadRequest("商品审计操作类型无效".to_owned()));
+    }
+    sqlx::query(
+        "INSERT INTO shop_product_audit_logs (id, product_id, action, actor_user_id, before_snapshot, after_snapshot, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&audit.id)
+    .bind(&audit.product_id)
+    .bind(&audit.action)
+    .bind(&audit.actor_user_id)
+    .bind(&audit.before_snapshot)
+    .bind(&audit.after_snapshot)
+    .bind(&audit.created_at)
+    .execute(&mut **transaction)
     .await?;
     Ok(())
 }

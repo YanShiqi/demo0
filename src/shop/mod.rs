@@ -127,6 +127,233 @@ pub fn validate_product_values(
     Ok(())
 }
 
+/// 创建商品并在同一事务中记录完整的管理审计。
+pub async fn create_product(
+    pool: &SqlitePool,
+    actor: &User,
+    product: &store::NewProduct,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    if actor.parsed_role() != Role::SuperAdmin {
+        return Err(AppError::Forbidden);
+    }
+    validate_product_for_create(pool, product).await?;
+    let now = format_utc(now)?;
+    let mut transaction = pool.begin().await?;
+    store::insert_product_in_transaction(&mut transaction, product, &actor.id, &now).await?;
+    store::insert_product_audit_in_transaction(
+        &mut transaction,
+        &new_product_audit(
+            product,
+            actor,
+            store::PRODUCT_AUDIT_CREATED,
+            "",
+            product_snapshot(product),
+            &now,
+        ),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// 更新商品资料；销量和稳定 ID 保留在数据库当前值中，图片名由服务端生成。
+pub async fn update_product(
+    pool: &SqlitePool,
+    actor: &User,
+    product_id: &str,
+    product: &store::NewProduct,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    if actor.parsed_role() != Role::SuperAdmin {
+        return Err(AppError::Forbidden);
+    }
+    let current = validate_product_for_update(pool, product_id, product).await?;
+    let now = format_utc(now)?;
+    let mut transaction = pool.begin().await?;
+    let changed = store::update_product_in_transaction(
+        &mut transaction,
+        product_id,
+        product,
+        &actor.id,
+        &now,
+    )
+    .await?;
+    if !changed {
+        return Err(AppError::NotFound);
+    }
+    store::insert_product_audit_in_transaction(
+        &mut transaction,
+        &new_product_audit(
+            product,
+            actor,
+            store::PRODUCT_AUDIT_UPDATED,
+            product_snapshot(&current),
+            product_snapshot(product),
+            &now,
+        ),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// 切换商品上架状态并写入审计，状态变化立即对后续读取生效。
+pub async fn set_product_enabled(
+    pool: &SqlitePool,
+    actor: &User,
+    product_id: &str,
+    enabled: bool,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    if actor.parsed_role() != Role::SuperAdmin {
+        return Err(AppError::Forbidden);
+    }
+    let current = store::find_product(pool, product_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let now = format_utc(now)?;
+    let mut transaction = pool.begin().await?;
+    let changed = store::set_product_enabled_in_transaction(
+        &mut transaction,
+        product_id,
+        enabled,
+        &actor.id,
+        &now,
+    )
+    .await?;
+    if !changed {
+        return Err(AppError::NotFound);
+    }
+    let action = if enabled {
+        store::PRODUCT_AUDIT_ENABLED
+    } else {
+        store::PRODUCT_AUDIT_DISABLED
+    };
+    store::insert_product_audit_in_transaction(
+        &mut transaction,
+        &new_product_audit(
+            &product_input_from_row(&current),
+            actor,
+            action,
+            product_snapshot(&current),
+            product_snapshot_with_enabled(&current, enabled),
+            &now,
+        ),
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// 删除没有历史订单的商品；有订单时保留商品以保证订单快照和审计可追溯。
+pub async fn delete_product(
+    pool: &SqlitePool,
+    actor: &User,
+    product_id: &str,
+    now: OffsetDateTime,
+) -> Result<(), AppError> {
+    if actor.parsed_role() != Role::SuperAdmin {
+        return Err(AppError::Forbidden);
+    }
+    let current = store::find_product(pool, product_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let now = format_utc(now)?;
+    let mut transaction = pool.begin().await?;
+    // 先写审计，再尝试删除；失败时整个事务回滚，避免留下虚假的删除记录。
+    store::insert_product_audit_in_transaction(
+        &mut transaction,
+        &new_product_audit(
+            &product_input_from_row(&current),
+            actor,
+            store::PRODUCT_AUDIT_DELETED,
+            product_snapshot(&current),
+            "",
+            &now,
+        ),
+    )
+    .await?;
+    if !store::delete_product_in_transaction(&mut transaction, product_id).await? {
+        return Err(AppError::BadRequest(
+            "商品已有历史订单，不能删除；如需下架请使用禁用操作".to_owned(),
+        ));
+    }
+    transaction.commit().await?;
+    Ok(())
+}
+
+fn new_product_audit(
+    product: &store::NewProduct,
+    actor: &User,
+    action: &str,
+    before_snapshot: impl Into<String>,
+    after_snapshot: impl Into<String>,
+    created_at: &str,
+) -> store::NewProductAudit {
+    store::NewProductAudit {
+        id: Ulid::new().to_string(),
+        product_id: product.id.clone(),
+        action: action.to_owned(),
+        actor_user_id: actor.id.clone(),
+        before_snapshot: before_snapshot.into(),
+        after_snapshot: after_snapshot.into(),
+        created_at: created_at.to_owned(),
+    }
+}
+
+fn product_input_from_row(row: &store::ProductRow) -> store::NewProduct {
+    store::NewProduct {
+        id: row.id.clone(),
+        name: row.name.clone(),
+        description: row.description.clone(),
+        icon_storage_name: row.icon_storage_name.clone(),
+        icon_media_type: row.icon_media_type.clone(),
+        price: row.price,
+        valid_days: row.valid_days,
+        max_active_per_user: row.max_active_per_user,
+        total_limit: row.total_limit,
+        sort_order: row.sort_order,
+    }
+}
+
+fn product_snapshot(product: &impl ProductSnapshot) -> String {
+    product.snapshot(false)
+}
+
+fn product_snapshot_with_enabled(row: &store::ProductRow, enabled: bool) -> String {
+    let input = product_input_from_row(row);
+    format!("{};enabled={enabled}", input.snapshot(false))
+}
+
+trait ProductSnapshot {
+    fn snapshot(&self, enabled: bool) -> String;
+}
+
+impl ProductSnapshot for store::NewProduct {
+    fn snapshot(&self, enabled: bool) -> String {
+        format!(
+            "id={};name={};description={};icon={};media={};price={};valid_days={:?};max_active_per_user={};total_limit={:?};sort_order={};enabled={enabled}",
+            self.id,
+            self.name,
+            self.description,
+            self.icon_storage_name,
+            self.icon_media_type,
+            self.price,
+            self.valid_days,
+            self.max_active_per_user,
+            self.total_limit,
+            self.sort_order
+        )
+    }
+}
+
+impl ProductSnapshot for store::ProductRow {
+    fn snapshot(&self, enabled: bool) -> String {
+        product_input_from_row(self).snapshot(enabled)
+    }
+}
+
 fn validate_product_text(
     field: &str,
     value: &str,

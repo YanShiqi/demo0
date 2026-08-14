@@ -65,6 +65,31 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         .route("/vouchers", get(web::voucher_list))
         .route("/admin/vouchers", get(web::admin_vouchers))
         .route(
+            "/admin/shop/products",
+            get(web::admin_shop_products).post(web::create_admin_shop_product),
+        )
+        .route("/admin/shop/products/new", get(web::admin_shop_product_new))
+        .route(
+            "/admin/shop/products/{id}/edit",
+            get(web::admin_shop_product_edit),
+        )
+        .route(
+            "/admin/shop/products/{id}",
+            axum::routing::post(web::update_admin_shop_product),
+        )
+        .route(
+            "/admin/shop/products/{id}/enable",
+            axum::routing::post(web::enable_admin_shop_product),
+        )
+        .route(
+            "/admin/shop/products/{id}/disable",
+            axum::routing::post(web::disable_admin_shop_product),
+        )
+        .route(
+            "/admin/shop/products/{id}/delete",
+            axum::routing::post(web::delete_admin_shop_product),
+        )
+        .route(
             "/admin/vouchers/lookup",
             axum::routing::post(web::lookup_voucher),
         )
