@@ -57,6 +57,12 @@ const DEFAULT_SHOP_VOUCHER_PAGE_SIZE: i64 = 20;
 const DEFAULT_SHOP_ADMIN_NOTE_MAX_LENGTH: usize = 200;
 const DEFAULT_SHOP_TOKEN_LOOKUP_MAX_ATTEMPTS: usize = 20;
 const DEFAULT_SHOP_TOKEN_LOOKUP_WINDOW_SECONDS: u64 = 60;
+const DEFAULT_SHOP_ICON_UPLOAD_MAX_BYTES: usize = 5 * 1024 * 1024;
+const DEFAULT_SHOP_ICON_INPUT_MAX_DIMENSION: u32 = 4096;
+const DEFAULT_SHOP_ICON_MAX_GIF_FRAMES: usize = 120;
+const DEFAULT_SHOP_ICON_MAX_DECODED_PIXELS: u64 = 80_000_000;
+const DEFAULT_SHOP_ICON_MAX_STORED_BYTES: usize = 1024 * 1024;
+const DEFAULT_SHOP_ICON_RESIZE_DIMENSIONS: &[u32] = &[512, 384, 256];
 const DEFAULT_SHOP_ICON_MAX_BYTES: usize = 256 * 1024;
 const DEFAULT_SHOP_ICON_MAX_DIMENSION: u32 = 1024;
 
@@ -154,6 +160,12 @@ pub struct ShopConfig {
     pub admin_note_max_length: usize,
     pub token_lookup_max_attempts: usize,
     pub token_lookup_window_seconds: u64,
+    pub icon_upload_max_bytes: usize,
+    pub icon_input_max_dimension: u32,
+    pub icon_max_gif_frames: usize,
+    pub icon_max_decoded_pixels: u64,
+    pub icon_max_stored_bytes: usize,
+    pub icon_resize_dimensions: Vec<u32>,
     pub icon_max_bytes: usize,
     pub icon_max_dimension: u32,
     pub products: Vec<crate::shop::catalog::ShopProduct>,
@@ -259,6 +271,24 @@ impl ShopConfig {
         let token_lookup_window_seconds = parse_optional_env("SHOP_TOKEN_LOOKUP_WINDOW_SECONDS")?
             .or(file_config.token_lookup_window_seconds)
             .unwrap_or(DEFAULT_SHOP_TOKEN_LOOKUP_WINDOW_SECONDS);
+        let icon_upload_max_bytes = parse_optional_env("SHOP_ICON_UPLOAD_MAX_BYTES")?
+            .or(file_config.icon_upload_max_bytes)
+            .unwrap_or(DEFAULT_SHOP_ICON_UPLOAD_MAX_BYTES);
+        let icon_input_max_dimension = parse_optional_env("SHOP_ICON_INPUT_MAX_DIMENSION")?
+            .or(file_config.icon_input_max_dimension)
+            .unwrap_or(DEFAULT_SHOP_ICON_INPUT_MAX_DIMENSION);
+        let icon_max_gif_frames = parse_optional_env("SHOP_ICON_MAX_GIF_FRAMES")?
+            .or(file_config.icon_max_gif_frames)
+            .unwrap_or(DEFAULT_SHOP_ICON_MAX_GIF_FRAMES);
+        let icon_max_decoded_pixels = parse_optional_env("SHOP_ICON_MAX_DECODED_PIXELS")?
+            .or(file_config.icon_max_decoded_pixels)
+            .unwrap_or(DEFAULT_SHOP_ICON_MAX_DECODED_PIXELS);
+        let icon_max_stored_bytes = parse_optional_env("SHOP_ICON_MAX_STORED_BYTES")?
+            .or(file_config.icon_max_stored_bytes)
+            .unwrap_or(DEFAULT_SHOP_ICON_MAX_STORED_BYTES);
+        let icon_resize_dimensions = parse_optional_env_list("SHOP_ICON_RESIZE_DIMENSIONS")?
+            .or(file_config.icon_resize_dimensions)
+            .unwrap_or_else(|| DEFAULT_SHOP_ICON_RESIZE_DIMENSIONS.to_vec());
         let icon_max_bytes = parse_optional_env("SHOP_ICON_MAX_BYTES")?
             .or(file_config.icon_max_bytes)
             .unwrap_or(DEFAULT_SHOP_ICON_MAX_BYTES);
@@ -281,6 +311,27 @@ impl ShopConfig {
             token_lookup_window_seconds > 0,
             "SHOP_TOKEN_LOOKUP_WINDOW_SECONDS 必须大于 0"
         );
+        anyhow::ensure!(
+            icon_upload_max_bytes > 0,
+            "SHOP_ICON_UPLOAD_MAX_BYTES 必须大于 0"
+        );
+        anyhow::ensure!(
+            icon_input_max_dimension > 0,
+            "SHOP_ICON_INPUT_MAX_DIMENSION 必须大于 0"
+        );
+        anyhow::ensure!(
+            icon_max_gif_frames > 0,
+            "SHOP_ICON_MAX_GIF_FRAMES 必须大于 0"
+        );
+        anyhow::ensure!(
+            icon_max_decoded_pixels > 0,
+            "SHOP_ICON_MAX_DECODED_PIXELS 必须大于 0"
+        );
+        anyhow::ensure!(
+            icon_max_stored_bytes > 0,
+            "SHOP_ICON_MAX_STORED_BYTES 必须大于 0"
+        );
+        validate_resize_dimensions(&icon_resize_dimensions)?;
         anyhow::ensure!(icon_max_bytes > 0, "SHOP_ICON_MAX_BYTES 必须大于 0");
         anyhow::ensure!(icon_max_dimension > 0, "SHOP_ICON_MAX_DIMENSION 必须大于 0");
         let products = crate::shop::catalog::load_products(
@@ -299,6 +350,12 @@ impl ShopConfig {
             admin_note_max_length,
             token_lookup_max_attempts,
             token_lookup_window_seconds,
+            icon_upload_max_bytes,
+            icon_input_max_dimension,
+            icon_max_gif_frames,
+            icon_max_decoded_pixels,
+            icon_max_stored_bytes,
+            icon_resize_dimensions,
             icon_max_bytes,
             icon_max_dimension,
             products,
@@ -724,6 +781,12 @@ struct ShopFileConfig {
     admin_note_max_length: Option<usize>,
     token_lookup_max_attempts: Option<usize>,
     token_lookup_window_seconds: Option<u64>,
+    icon_upload_max_bytes: Option<usize>,
+    icon_input_max_dimension: Option<u32>,
+    icon_max_gif_frames: Option<usize>,
+    icon_max_decoded_pixels: Option<u64>,
+    icon_max_stored_bytes: Option<usize>,
+    icon_resize_dimensions: Option<Vec<u32>>,
     icon_max_bytes: Option<usize>,
     icon_max_dimension: Option<u32>,
 }
@@ -740,5 +803,87 @@ where
             .map_err(|error| anyhow::anyhow!("{name} 配置值无效：{error}")),
         Err(env::VarError::NotPresent) => Ok(None),
         Err(error) => Err(error).with_context(|| format!("读取 {name} 失败")),
+    }
+}
+
+fn parse_optional_env_list(name: &str) -> Result<Option<Vec<u32>>> {
+    match env::var(name) {
+        Ok(value) => value
+            .split(',')
+            .map(str::trim)
+            .map(|part| {
+                part.parse::<u32>()
+                    .map_err(|error| anyhow::anyhow!("{name} 配置值无效：{error}"))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(Some),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("读取 {name} 失败")),
+    }
+}
+
+fn validate_resize_dimensions(dimensions: &[u32]) -> Result<()> {
+    anyhow::ensure!(
+        !dimensions.is_empty(),
+        "SHOP_ICON_RESIZE_DIMENSIONS 不能为空"
+    );
+    anyhow::ensure!(
+        dimensions.iter().all(|dimension| *dimension > 0),
+        "SHOP_ICON_RESIZE_DIMENSIONS 必须全部大于 0"
+    );
+    anyhow::ensure!(
+        dimensions.windows(2).all(|pair| pair[0] > pair[1]),
+        "SHOP_ICON_RESIZE_DIMENSIONS 必须严格降序排列"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shop_config_loads_runtime_icon_limits() {
+        let config = ShopConfig::from_sources(Some(ShopFileConfig {
+            enabled: Some(false),
+            icon_dir: Some("data/test-shop-icons".to_owned()),
+            page_size: Some(8),
+            voucher_page_size: Some(16),
+            admin_note_max_length: Some(120),
+            token_lookup_max_attempts: Some(7),
+            token_lookup_window_seconds: Some(45),
+            icon_upload_max_bytes: Some(5_000_000),
+            icon_input_max_dimension: Some(2048),
+            icon_max_gif_frames: Some(60),
+            icon_max_decoded_pixels: Some(12_000_000),
+            icon_max_stored_bytes: Some(700_000),
+            icon_resize_dimensions: Some(vec![480, 320, 160]),
+            ..ShopFileConfig::default()
+        }))
+        .unwrap();
+
+        assert!(!config.enabled);
+        assert_eq!(config.icon_dir, PathBuf::from("data/test-shop-icons"));
+        assert_eq!(config.icon_upload_max_bytes, 5_000_000);
+        assert_eq!(config.icon_input_max_dimension, 2048);
+        assert_eq!(config.icon_max_gif_frames, 60);
+        assert_eq!(config.icon_max_decoded_pixels, 12_000_000);
+        assert_eq!(config.icon_max_stored_bytes, 700_000);
+        assert_eq!(config.icon_resize_dimensions, vec![480, 320, 160]);
+    }
+
+    #[test]
+    fn shop_config_rejects_empty_or_non_descending_resize_dimensions() {
+        let empty = ShopConfig::from_sources(Some(ShopFileConfig {
+            icon_resize_dimensions: Some(Vec::new()),
+            ..ShopFileConfig::default()
+        }));
+        assert!(empty.is_err());
+
+        let non_descending = ShopConfig::from_sources(Some(ShopFileConfig {
+            icon_resize_dimensions: Some(vec![256, 512]),
+            ..ShopFileConfig::default()
+        }));
+        assert!(non_descending.is_err());
     }
 }

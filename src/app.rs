@@ -11,6 +11,9 @@ use crate::{
     web,
 };
 
+// multipart 字段与边界会占用额外请求体空间，避免合法文件在解析前被拦截。
+const MULTIPART_FORM_OVERHEAD_BYTES: usize = 128 * 1024;
+
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
@@ -25,7 +28,8 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         .max_upload_bytes
         .max(MAX_UPLOAD_BYTES)
         .max(config.novels.chapter_max_upload_bytes)
-        + 128 * 1024;
+        .max(config.shop.icon_upload_max_bytes)
+        + MULTIPART_FORM_OVERHEAD_BYTES;
     let voucher_lookup_limiter = AttemptLimiter::new(
         Duration::from_secs(config.shop.token_lookup_window_seconds),
         config.shop.token_lookup_max_attempts,

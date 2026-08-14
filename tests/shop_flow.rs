@@ -27,6 +27,19 @@ fn sqlite_url(path: &Path) -> String {
     format!("sqlite://{}?mode=rwc", path.display())
 }
 
+#[test]
+fn shop_test_config_provides_runtime_icon_processing_limits() {
+    let temporary = tempfile::tempdir().unwrap();
+    let config = test_config(&temporary, sqlite_url(&temporary.path().join("config.db")));
+
+    assert_eq!(config.shop.icon_upload_max_bytes, 5 * 1024 * 1024);
+    assert_eq!(config.shop.icon_input_max_dimension, 4096);
+    assert_eq!(config.shop.icon_max_gif_frames, 120);
+    assert_eq!(config.shop.icon_max_decoded_pixels, 80_000_000);
+    assert_eq!(config.shop.icon_max_stored_bytes, 1024 * 1024);
+    assert_eq!(config.shop.icon_resize_dimensions, vec![512, 384, 256]);
+}
+
 #[tokio::test]
 async fn shop_migration_creates_order_voucher_and_audit_tables() {
     let temporary = tempfile::tempdir().unwrap();
@@ -608,6 +621,12 @@ fn test_config(temporary: &TempDir, database_url: String) -> Config {
             admin_note_max_length: 200,
             token_lookup_max_attempts: 20,
             token_lookup_window_seconds: 60,
+            icon_upload_max_bytes: 5 * 1024 * 1024,
+            icon_input_max_dimension: 4096,
+            icon_max_gif_frames: 120,
+            icon_max_decoded_pixels: 80_000_000,
+            icon_max_stored_bytes: 1024 * 1024,
+            icon_resize_dimensions: vec![512, 384, 256],
             icon_max_bytes: 256 * 1024,
             icon_max_dimension: 1024,
             products: Vec::new(),
