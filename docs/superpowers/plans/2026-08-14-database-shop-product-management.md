@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Do not import or preserve old `content/shop.toml` product data; the new product table starts empty and the TOML file/loading code is removed.
+- Final state must not import or preserve old `content/shop.toml` product data; the new product table starts empty and the TOML file/loading code is removed in the database integration task. Earlier tasks may retain the legacy fields temporarily solely to keep the branch compiling.
 - Use portable standard SQL; do not add avoidable SQLite functions or syntax. Bind Rust-generated UTC RFC 3339 timestamps.
 - Only `Role::SuperAdmin` can read or mutate product management routes; every state-changing form uses POST and CSRF.
 - Add concise Chinese comments at key logic and every new committed TOML/`.env.example` option.
@@ -45,10 +45,9 @@
 
 - [ ] Add failing config assertions that a valid `[shop]` section loads all new values and rejects an empty/non-descending resize-dimension list.
 - [ ] Run `cargo test shop_config --lib` and verify the new assertions fail because legacy product loading still exists.
-- [ ] Remove `DEFAULT_SHOP_PRODUCTS_FILE`, catalog loading from `ShopConfig::from_sources`, `products_file`, and `products` fields. Add the documented defaults: 5 MiB upload, 4096 input dimension, 120 GIF frames, 80,000,000 decoded pixels, 1 MiB stored output, and `[512, 384, 256]` resize candidates.
+- [ ] Add the documented defaults: 5 MiB upload, 4096 input dimension, 120 GIF frames, 80,000,000 decoded pixels, 1 MiB stored output, and `[512, 384, 256]` resize candidates. Keep the legacy product fields and TOML loader temporarily so existing consumers compile; Task 5 removes them after database reads are in place.
 - [ ] Add Chinese comments for every TOML and `.env.example` setting; parse the resize list from a comma-separated environment value so deployment overrides remain possible.
 - [ ] Increase `DefaultBodyLimit` calculation to include the configured icon upload limit plus multipart overhead, while preserving existing Meme/avatar/novel limits.
-- [ ] Delete `content/shop.toml` and confirm `rg -n "products_file|content/shop.toml|shop.products" src config .env.example templates` returns no runtime references.
 - [ ] Run `cargo test --lib`, `cargo fmt --check`, and `cargo check`.
 - [ ] Commit: `Remove TOML shop product loading`.
 
@@ -129,6 +128,7 @@
 - [ ] Run `cargo test purchase_ --test shop_flow` and verify the new tests fail because purchases still read `state.config.shop.products`.
 - [ ] Load enabled products from `store::list_enabled_products` on each `/shop` request; calculate personal active counts from database rows and show both personal-limit and sold-out reasons.
 - [ ] In `shop::purchase`, start a transaction, re-read the product, validate enabled/current fields, retain existing user lock/idempotency checks, conditionally increment sales, create the snapshot from the database row, spend currency, create voucher/audit, and commit.
+- [ ] Remove `DEFAULT_SHOP_PRODUCTS_FILE`, `products_file`, the in-memory `products` field, `content/shop.toml`, and all TOML catalog loading only after every public/purchase caller uses the database. Confirm `rg -n "products_file|content/shop.toml|shop.products" src config .env.example templates` returns no runtime references.
 - [ ] Ensure an unsuccessful conditional sales update returns a sold-out business error before currency is touched. Keep all failure paths transactional.
 - [ ] Preserve one-time Token behavior and existing order/voucher snapshots when the product is edited after purchase.
 - [ ] Run all shop integration tests, `cargo fmt --check`, and strict Clippy.
