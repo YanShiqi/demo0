@@ -111,8 +111,8 @@ reward_amount = 1
 enabled = true
 # 旧商品目录 TOML 的路径；数据库商品读取接入前的临时兼容配置。
 products_file = "content/shop.toml"
-# 旧商品图标目录；数据库商品读取接入前的临时兼容配置。
-icon_dir = "static/shop/products"
+# 数据库商品图标的运行数据目录；目录内容不提交 Git。
+icon_dir = "data/shop/product-icons"
 # 商城商品列表每页展示数量。
 page_size = 12
 # 用户兑换券列表每页展示数量。

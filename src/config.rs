@@ -1,4 +1,8 @@
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{
+    env,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -51,7 +55,9 @@ const DEFAULT_CHECK_IN_ENABLED: bool = true;
 const DEFAULT_CHECK_IN_REWARD_AMOUNT: i64 = 1;
 const DEFAULT_SHOP_ENABLED: bool = true;
 const DEFAULT_SHOP_PRODUCTS_FILE: &str = "content/shop.toml";
-const DEFAULT_SHOP_ICON_DIR: &str = "static/shop/products";
+const DEFAULT_SHOP_ICON_DIR: &str = "data/shop/product-icons";
+// 旧目录仅供过渡期 TOML 商品校验使用，数据库商品接入后随目录加载逻辑一并删除。
+const LEGACY_SHOP_CATALOG_ICON_DIR: &str = "static/shop/products";
 const DEFAULT_SHOP_PAGE_SIZE: i64 = 12;
 const DEFAULT_SHOP_VOUCHER_PAGE_SIZE: i64 = 20;
 const DEFAULT_SHOP_ADMIN_NOTE_MAX_LENGTH: usize = 200;
@@ -336,7 +342,7 @@ impl ShopConfig {
         anyhow::ensure!(icon_max_dimension > 0, "SHOP_ICON_MAX_DIMENSION 必须大于 0");
         let products = crate::shop::catalog::load_products(
             &products_file,
-            &icon_dir,
+            Path::new(LEGACY_SHOP_CATALOG_ICON_DIR),
             icon_max_bytes,
             icon_max_dimension,
         )?;
@@ -808,18 +814,21 @@ where
 
 fn parse_optional_env_list(name: &str) -> Result<Option<Vec<u32>>> {
     match env::var(name) {
-        Ok(value) => value
-            .split(',')
-            .map(str::trim)
-            .map(|part| {
-                part.parse::<u32>()
-                    .map_err(|error| anyhow::anyhow!("{name} 配置值无效：{error}"))
-            })
-            .collect::<Result<Vec<_>>>()
-            .map(Some),
+        Ok(value) => parse_dimension_list(&value, name).map(Some),
         Err(env::VarError::NotPresent) => Ok(None),
         Err(error) => Err(error).with_context(|| format!("读取 {name} 失败")),
     }
+}
+
+fn parse_dimension_list(value: &str, name: &str) -> Result<Vec<u32>> {
+    value
+        .split(',')
+        .map(str::trim)
+        .map(|part| {
+            part.parse::<u32>()
+                .map_err(|error| anyhow::anyhow!("{name} 配置值无效：{error}"))
+        })
+        .collect()
 }
 
 fn validate_resize_dimensions(dimensions: &[u32]) -> Result<()> {
@@ -873,6 +882,13 @@ mod tests {
     }
 
     #[test]
+    fn shop_config_defaults_to_runtime_icon_storage_directory() {
+        let config = ShopConfig::from_sources(Some(ShopFileConfig::default())).unwrap();
+
+        assert_eq!(config.icon_dir, PathBuf::from("data/shop/product-icons"));
+    }
+
+    #[test]
     fn shop_config_rejects_empty_or_non_descending_resize_dimensions() {
         let empty = ShopConfig::from_sources(Some(ShopFileConfig {
             icon_resize_dimensions: Some(Vec::new()),
@@ -885,5 +901,15 @@ mod tests {
             ..ShopFileConfig::default()
         }));
         assert!(non_descending.is_err());
+    }
+
+    #[test]
+    fn shop_config_parses_comma_separated_resize_dimensions() {
+        assert_eq!(
+            parse_dimension_list("512, 384,256", "SHOP_ICON_RESIZE_DIMENSIONS").unwrap(),
+            vec![512, 384, 256]
+        );
+        assert!(parse_dimension_list("", "SHOP_ICON_RESIZE_DIMENSIONS").is_err());
+        assert!(parse_dimension_list("512,invalid", "SHOP_ICON_RESIZE_DIMENSIONS").is_err());
     }
 }
