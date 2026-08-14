@@ -214,6 +214,19 @@ pub async fn find_product(
     .await?)
 }
 
+/// 在商品管理事务中读取当前商品，确保后续删除使用同一快照。
+pub async fn find_product_in_transaction(
+    transaction: &mut Transaction<'_, Sqlite>,
+    product_id: &str,
+) -> Result<Option<ProductRow>, AppError> {
+    Ok(sqlx::query_as::<_, ProductRow>(
+        "SELECT id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at FROM shop_products WHERE id = ?",
+    )
+    .bind(product_id)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
 /// 新建商品；时间由 Rust 生成后绑定，避免业务 SQL 依赖数据库时钟。
 pub async fn insert_product(
     pool: &SqlitePool,
@@ -388,15 +401,29 @@ pub async fn delete_product(pool: &SqlitePool, product_id: &str) -> Result<bool,
 pub async fn delete_product_in_transaction(
     transaction: &mut Transaction<'_, Sqlite>,
     product_id: &str,
-) -> Result<bool, AppError> {
-    let result = sqlx::query(
-        "DELETE FROM shop_products WHERE id = ? AND NOT EXISTS (SELECT 1 FROM shop_orders WHERE product_id = ?)",
+) -> Result<Option<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "DELETE FROM shop_products WHERE id = ? AND NOT EXISTS (SELECT 1 FROM shop_orders WHERE product_id = ?) RETURNING icon_storage_name",
     )
     .bind(product_id)
     .bind(product_id)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(result.rows_affected() == 1)
+    .fetch_optional(&mut **transaction)
+    .await?)
+}
+
+/// 判断图标是否仍被当前商品或历史订单快照引用。
+pub async fn product_icon_is_referenced(
+    pool: &SqlitePool,
+    icon_storage_name: &str,
+) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT CASE WHEN EXISTS (SELECT 1 FROM shop_products WHERE icon_storage_name = ?) OR EXISTS (SELECT 1 FROM shop_orders WHERE icon_file = ?) THEN 1 ELSE 0 END",
+    )
+    .bind(icon_storage_name)
+    .bind(icon_storage_name)
+    .fetch_one(pool)
+    .await?
+        != 0)
 }
 
 /// 写入商品管理审计；商品 ID 不建外键，以保证永久删除后的历史仍可查询。

@@ -252,15 +252,15 @@ pub async fn delete_product(
     actor: &User,
     product_id: &str,
     now: OffsetDateTime,
-) -> Result<(), AppError> {
+) -> Result<String, AppError> {
     if actor.parsed_role() != Role::SuperAdmin {
         return Err(AppError::Forbidden);
     }
-    let current = store::find_product(pool, product_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
     let now = format_utc(now)?;
     let mut transaction = pool.begin().await?;
+    let current = store::find_product_in_transaction(&mut transaction, product_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
     // 先写审计，再尝试删除；失败时整个事务回滚，避免留下虚假的删除记录。
     store::insert_product_audit_in_transaction(
         &mut transaction,
@@ -274,13 +274,15 @@ pub async fn delete_product(
         ),
     )
     .await?;
-    if !store::delete_product_in_transaction(&mut transaction, product_id).await? {
+    let Some(deleted_icon_storage_name) =
+        store::delete_product_in_transaction(&mut transaction, product_id).await?
+    else {
         return Err(AppError::BadRequest(
-            "商品已有历史订单，不能删除；如需下架请使用禁用操作".to_owned(),
+            "商品已被其他管理操作更新，或已有历史订单；请刷新后重试".to_owned(),
         ));
-    }
+    };
     transaction.commit().await?;
-    Ok(())
+    Ok(deleted_icon_storage_name)
 }
 
 fn new_product_audit(

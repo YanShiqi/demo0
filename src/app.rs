@@ -20,6 +20,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub login_limiter: LoginLimiter,
     pub voucher_lookup_limiter: AttemptLimiter,
+    /// 串行化商品图标文件与商品行的替换/删除，避免清理旧文件时与管理操作竞态。
+    pub product_icon_mutation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 pub fn build(pool: SqlitePool, config: Config) -> Router {
@@ -39,6 +41,7 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
         config: Arc::new(config),
         login_limiter: LoginLimiter::default(),
         voucher_lookup_limiter,
+        product_icon_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     Router::new()

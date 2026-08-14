@@ -22,6 +22,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tower::ServiceExt;
 
 const CREATED_AT: &str = "2026-08-13T12:00:00Z";
+const SHOP_PRODUCT_BOUNDARY: &str = "demo0-product-boundary";
 
 fn sqlite_url(path: &Path) -> String {
     format!("sqlite://{}?mode=rwc", path.display())
@@ -1169,6 +1170,55 @@ async fn admin_shop_routes_require_super_admin_and_csrf() {
 }
 
 #[tokio::test]
+async fn admin_shop_create_invalid_price_rerenders_form_with_submitted_values() {
+    let fixture = ShopFixture::new().await;
+    let super_cookie = fixture.sign_in_user(&fixture.super_admin.username).await;
+    let form_html = fixture
+        .get_html("/admin/shop/products/new", &super_cookie)
+        .await;
+    let csrf = between(&form_html, "name=\"csrf_token\" value=\"", "\"");
+    let upload_dir = fixture.temporary.path().join("upload");
+    create_shop_icon(&upload_dir, "icon.png");
+    let icon_bytes = std::fs::read(upload_dir.join("icon.png")).unwrap();
+    let body = shop_product_multipart_body(
+        csrf,
+        [
+            ("id", "new-product"),
+            ("name", "提交后的商品名"),
+            ("description", "提交后的商品说明"),
+            ("price", "-1"),
+            ("valid_days", ""),
+            ("max_active_per_user", "2"),
+            ("total_limit", ""),
+            ("sort_order", "1"),
+        ],
+        &icon_bytes,
+    );
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/shop/products")
+                .header(header::COOKIE, &super_cookie)
+                .header(
+                    header::CONTENT_TYPE,
+                    "multipart/form-data; boundary=demo0-product-boundary",
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let html = response_html(response).await;
+    assert!(html.contains("商品价格必须大于 0"));
+    assert!(html.contains("value=\"new-product\""));
+    assert!(html.contains("value=\"提交后的商品名\""));
+}
+
+#[tokio::test]
 async fn admin_voucher_lookup_normalizes_token_without_changing_status_or_echoing_it() {
     let fixture = ShopFixture::new().await;
     fixture.grant_buyer_currency(50).await;
@@ -1628,6 +1678,34 @@ fn create_shop_icon(icon_dir: &Path, name: &str) {
     image::DynamicImage::new_rgba8(2, 2)
         .save(icon_dir.join(name))
         .unwrap();
+}
+
+fn shop_product_multipart_body<const N: usize>(
+    csrf: &str,
+    fields: [(&str, &str); N],
+    icon_bytes: &[u8],
+) -> Vec<u8> {
+    let mut body = Vec::new();
+    push_shop_product_text_part(&mut body, "csrf_token", csrf);
+    for (name, value) in fields {
+        push_shop_product_text_part(&mut body, name, value);
+    }
+    body.extend_from_slice(format!("--{SHOP_PRODUCT_BOUNDARY}\r\n").as_bytes());
+    body.extend_from_slice(
+        b"Content-Disposition: form-data; name=\"icon\"; filename=\"icon.png\"\r\nContent-Type: image/png\r\n\r\n",
+    );
+    body.extend_from_slice(icon_bytes);
+    body.extend_from_slice(format!("\r\n--{SHOP_PRODUCT_BOUNDARY}--\r\n").as_bytes());
+    body
+}
+
+fn push_shop_product_text_part(body: &mut Vec<u8>, name: &str, value: &str) {
+    body.extend_from_slice(format!("--{SHOP_PRODUCT_BOUNDARY}\r\n").as_bytes());
+    body.extend_from_slice(
+        format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+    );
+    body.extend_from_slice(value.as_bytes());
+    body.extend_from_slice(b"\r\n");
 }
 
 fn response_cookie(response: &axum::response::Response) -> String {

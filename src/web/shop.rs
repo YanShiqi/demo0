@@ -60,7 +60,7 @@ pub struct VoucherCancelForm {
     reason: String,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ProductMultipart {
     csrf_token: String,
     id: String,
@@ -202,7 +202,7 @@ pub async fn admin_shop_product_new(
 ) -> Result<Response, AppError> {
     let session = auth::require_session(&state.pool, &headers).await?;
     let actor = super::require_super_admin(&state, &session).await?;
-    render_admin_shop_product_form(&state, &session, &actor, None, None, StatusCode::OK).await
+    render_admin_shop_product_form(&state, &session, &actor, None, None, None, StatusCode::OK).await
 }
 
 /// 展示现有商品的编辑表单；不返回图标二进制，只返回可缓存预览 URL。
@@ -222,6 +222,7 @@ pub async fn admin_shop_product_edit(
         &actor,
         Some(product),
         None,
+        None,
         StatusCode::OK,
     )
     .await
@@ -235,13 +236,33 @@ pub async fn create_admin_shop_product(
 ) -> Result<Response, AppError> {
     let session = auth::require_session(&state.pool, &headers).await?;
     let actor = super::require_super_admin(&state, &session).await?;
+    let _icon_lock = state.product_icon_mutation_lock.lock().await;
     let form = read_product_multipart(multipart).await?;
     auth::verify_csrf(&session, &form.csrf_token)?;
-    let icon_bytes = form
-        .icon_bytes
-        .clone()
-        .ok_or_else(|| AppError::BadRequest("请选择商品图标".to_owned()))?;
-    let processed = process_icon(icon_bytes, &state).await?;
+    let icon_bytes = match form.icon_bytes.clone() {
+        Some(icon_bytes) => icon_bytes,
+        None => {
+            return render_admin_shop_product_bad_request(
+                &state,
+                &session,
+                &actor,
+                None,
+                &form,
+                "请选择商品图标",
+            )
+            .await;
+        }
+    };
+    let processed = match process_icon(icon_bytes, &state).await {
+        Ok(processed) => processed,
+        Err(AppError::BadRequest(message)) => {
+            return render_admin_shop_product_bad_request(
+                &state, &session, &actor, None, &form, &message,
+            )
+            .await;
+        }
+        Err(error) => return Err(error),
+    };
     let storage_name = generated_icon_name(processed.extension);
     let temporary_path = state
         .config
@@ -249,8 +270,17 @@ pub async fn create_admin_shop_product(
         .icon_dir
         .join(format!(".{storage_name}.tmp"));
     let final_path = state.config.shop.icon_dir.join(&storage_name);
-    let product = match form.into_product(storage_name.clone(), processed.media_type.to_owned()) {
+    let product = match form
+        .clone()
+        .into_product(storage_name.clone(), processed.media_type.to_owned())
+    {
         Ok(product) => product,
+        Err(AppError::BadRequest(message)) => {
+            return render_admin_shop_product_bad_request(
+                &state, &session, &actor, None, &form, &message,
+            )
+            .await;
+        }
         Err(error) => return Err(error),
     };
     write_temporary_icon(
@@ -268,7 +298,15 @@ pub async fn create_admin_shop_product(
     {
         remove_quietly(&temporary_path).await;
         remove_quietly(&final_path).await;
-        return Err(error);
+        return match error {
+            AppError::BadRequest(message) => {
+                render_admin_shop_product_bad_request(
+                    &state, &session, &actor, None, &form, &message,
+                )
+                .await
+            }
+            error => Err(error),
+        };
     }
     redirect("/admin/shop/products", None)
 }
@@ -282,6 +320,7 @@ pub async fn update_admin_shop_product(
 ) -> Result<Response, AppError> {
     let session = auth::require_session(&state.pool, &headers).await?;
     let actor = super::require_super_admin(&state, &session).await?;
+    let _icon_lock = state.product_icon_mutation_lock.lock().await;
     let form = read_product_multipart(multipart).await?;
     auth::verify_csrf(&session, &form.csrf_token)?;
     let current = store::find_product(&state.pool, &product_id)
@@ -289,7 +328,21 @@ pub async fn update_admin_shop_product(
         .ok_or(AppError::NotFound)?;
     let (storage_name, media_type, temporary_path, final_path) =
         if let Some(icon_bytes) = form.icon_bytes.clone() {
-            let processed = process_icon(icon_bytes, &state).await?;
+            let processed = match process_icon(icon_bytes, &state).await {
+                Ok(processed) => processed,
+                Err(AppError::BadRequest(message)) => {
+                    return render_admin_shop_product_bad_request(
+                        &state,
+                        &session,
+                        &actor,
+                        Some(&current),
+                        &form,
+                        &message,
+                    )
+                    .await;
+                }
+                Err(error) => return Err(error),
+            };
             let storage_name = generated_icon_name(processed.extension);
             let temporary_path = state
                 .config
@@ -317,8 +370,22 @@ pub async fn update_admin_shop_product(
                 None,
             )
         };
-    let product = match form.into_product(storage_name, media_type) {
+    let product = match form.clone().into_product(storage_name, media_type) {
         Ok(product) => product,
+        Err(AppError::BadRequest(message)) => {
+            if let Some(path) = temporary_path.as_ref() {
+                remove_quietly(path).await;
+            }
+            return render_admin_shop_product_bad_request(
+                &state,
+                &session,
+                &actor,
+                Some(&current),
+                &form,
+                &message,
+            )
+            .await;
+        }
         Err(error) => {
             if let Some(path) = temporary_path.as_ref() {
                 remove_quietly(path).await;
@@ -333,6 +400,7 @@ pub async fn update_admin_shop_product(
             return Err(error.into());
         }
     }
+    let old_icon_storage_name = current.icon_storage_name.clone();
     if let Err(error) = shop::update_product(
         &state.pool,
         &actor,
@@ -348,9 +416,22 @@ pub async fn update_admin_shop_product(
         if let Some(path) = final_path.as_ref() {
             remove_quietly(path).await;
         }
-        return Err(error);
+        return match error {
+            AppError::BadRequest(message) => {
+                render_admin_shop_product_bad_request(
+                    &state,
+                    &session,
+                    &actor,
+                    Some(&current),
+                    &form,
+                    &message,
+                )
+                .await
+            }
+            error => Err(error),
+        };
     }
-    // 旧图标可能仍被历史订单快照引用，管理操作不主动删除它。
+    cleanup_icon_if_unreferenced(&state, &old_icon_storage_name).await?;
     redirect("/admin/shop/products", None)
 }
 
@@ -380,12 +461,11 @@ pub async fn delete_admin_shop_product(
 ) -> Result<Response, AppError> {
     let session = auth::require_session(&state.pool, &headers).await?;
     let actor = super::require_super_admin(&state, &session).await?;
+    let _icon_lock = state.product_icon_mutation_lock.lock().await;
     auth::verify_csrf(&session, &form.csrf_token)?;
-    let current = store::find_product(&state.pool, &product_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
-    shop::delete_product(&state.pool, &actor, &product_id, OffsetDateTime::now_utc()).await?;
-    remove_quietly(&state.config.shop.icon_dir.join(current.icon_storage_name)).await;
+    let deleted_icon =
+        shop::delete_product(&state.pool, &actor, &product_id, OffsetDateTime::now_utc()).await?;
+    cleanup_icon_if_unreferenced(&state, &deleted_icon).await?;
     redirect("/admin/shop/products", None)
 }
 
@@ -446,6 +526,24 @@ async fn process_icon(
 
 fn generated_icon_name(extension: &str) -> String {
     format!("{}.{}", Ulid::new().to_string().to_lowercase(), extension)
+}
+
+async fn cleanup_icon_if_unreferenced(
+    state: &AppState,
+    icon_storage_name: &str,
+) -> Result<(), AppError> {
+    if store::product_icon_is_referenced(&state.pool, icon_storage_name).await? {
+        return Ok(());
+    }
+    match tokio::fs::remove_file(state.config.shop.icon_dir.join(icon_storage_name)).await {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            // 数据库已提交，清理失败可由后续维护任务重试；记录原因但不回滚已完成的管理操作。
+            tracing::warn!(error = %error, "商品旧图标清理失败");
+        }
+    }
+    Ok(())
 }
 
 async fn write_temporary_icon(
@@ -509,10 +607,11 @@ async fn render_admin_shop_product_form(
     session: &crate::model::SessionRow,
     actor: &crate::model::User,
     product: Option<store::ProductRow>,
+    submitted: Option<&ProductMultipart>,
     error: Option<&str>,
     status: StatusCode,
 ) -> Result<Response, AppError> {
-    let view = product_form_view(product.as_ref(), error.unwrap_or_default());
+    let view = product_form_view(product.as_ref(), submitted, error.unwrap_or_default());
     render(
         AdminShopProductFormTemplate {
             ctx: page_context_for_user(state, session.csrf_token.clone(), actor).await?,
@@ -533,6 +632,26 @@ async fn render_admin_shop_product_form(
         status,
         None,
     )
+}
+
+async fn render_admin_shop_product_bad_request(
+    state: &AppState,
+    session: &crate::model::SessionRow,
+    actor: &crate::model::User,
+    product: Option<&store::ProductRow>,
+    submitted: &ProductMultipart,
+    message: &str,
+) -> Result<Response, AppError> {
+    render_admin_shop_product_form(
+        state,
+        session,
+        actor,
+        product.cloned(),
+        Some(submitted),
+        Some(message),
+        StatusCode::BAD_REQUEST,
+    )
+    .await
 }
 
 fn admin_shop_product_view(product: store::ProductRow) -> AdminShopProductView {
@@ -561,6 +680,7 @@ fn admin_shop_product_view(product: store::ProductRow) -> AdminShopProductView {
 #[allow(clippy::type_complexity)]
 fn product_form_view(
     product: Option<&store::ProductRow>,
+    submitted: Option<&ProductMultipart>,
     error: &str,
 ) -> (
     String,
@@ -575,6 +695,23 @@ fn product_form_view(
     bool,
     String,
 ) {
+    if let Some(form) = submitted {
+        return (
+            form.id.clone(),
+            form.name.clone(),
+            form.description.clone(),
+            form.price.clone(),
+            form.valid_days.clone(),
+            form.max_active_per_user.clone(),
+            form.total_limit.clone(),
+            form.sort_order.clone(),
+            product
+                .map(|product| icon_url(&product.icon_storage_name))
+                .unwrap_or_default(),
+            product.is_some(),
+            error.to_owned(),
+        );
+    }
     match product {
         Some(product) => (
             product.id.clone(),
@@ -837,12 +974,11 @@ fn is_generated_icon_file_name(file_name: &str) -> bool {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .is_some_and(|stem| {
-                !stem.is_empty()
-                    && stem.chars().all(|character| {
-                        character.is_ascii_lowercase()
-                            || character.is_ascii_digit()
-                            || character == '-'
+                stem.len() == 26
+                    && stem.bytes().all(|character| {
+                        character.is_ascii_lowercase() || character.is_ascii_digit()
                     })
+                    && Ulid::from_string(stem).is_ok()
             })
         && generated_icon_media_type(file_name).is_some()
 }
@@ -981,5 +1117,19 @@ mod tests {
         );
         assert_eq!(parse_product_integer("价格", "42").unwrap(), 42);
         assert!(parse_product_integer("价格", "not-a-number").is_err());
+    }
+
+    #[test]
+    fn generated_icon_names_require_canonical_lowercase_ulids() {
+        let stem = Ulid::new().to_string().to_lowercase();
+        assert!(is_generated_icon_file_name(&format!("{stem}.webp")));
+        assert!(!is_generated_icon_file_name(&format!(
+            "{}.webp",
+            stem.to_uppercase()
+        )));
+        assert!(!is_generated_icon_file_name(&format!(
+            "{}.webp",
+            &stem[..25]
+        )));
     }
 }
