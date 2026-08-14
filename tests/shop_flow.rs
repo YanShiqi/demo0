@@ -1129,6 +1129,7 @@ async fn player_catalog_marks_insufficient_balance_and_active_limit_as_disabled(
 
     let insufficient = fixture.get_html("/shop", &cookie).await;
     assert!(insufficient.contains("余额不足"));
+    assert!(insufficient.contains(">余额不足</button>"));
 
     fixture.grant_buyer_currency(50).await;
     let first = fixture
@@ -1137,6 +1138,7 @@ async fn player_catalog_marks_insufficient_balance_and_active_limit_as_disabled(
     assert_eq!(first.status(), StatusCode::OK);
     let limited = fixture.get_html("/shop", &cookie).await;
     assert!(limited.contains("有效兑换码持有数量已达上限"));
+    assert!(limited.contains(">有效兑换码持有数量已达上限</button>"));
 }
 
 #[tokio::test]

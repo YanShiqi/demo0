@@ -33,7 +33,7 @@
       {% if product.can_purchase %}
       <button class="button" type="submit">立即兑换</button>
       {% else %}
-      <button class="button" type="submit" disabled aria-describedby="reason-{{ product.id }}">暂不可兑换</button>
+      <button class="button" type="submit" disabled aria-describedby="reason-{{ product.id }}">{{ product.disabled_reason }}</button>
       <p id="reason-{{ product.id }}" class="form-error">{{ product.disabled_reason }}</p>
       {% endif %}
     </form>
