@@ -13,6 +13,7 @@ axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.22"
 cookie = "0.18"
 dotenvy = "0.15"
+gif = "0.14"
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 pulldown-cmark = "0.13.4"

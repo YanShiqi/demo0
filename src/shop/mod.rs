@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod icon;
 pub mod store;
 pub mod token;
 
