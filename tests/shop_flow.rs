@@ -1140,7 +1140,7 @@ async fn player_catalog_marks_insufficient_balance_and_active_limit_as_disabled(
 }
 
 #[tokio::test]
-async fn player_rejects_unknown_or_disabled_products_and_serves_safe_icons() {
+async fn player_rejects_unknown_or_disabled_products_and_legacy_icon_names() {
     let fixture = ShopFixture::new().await;
     fixture.grant_buyer_currency(50).await;
     let (cookie, csrf) = fixture.sign_in_buyer().await;
@@ -1152,16 +1152,10 @@ async fn player_rejects_unknown_or_disabled_products_and_serves_safe_icons() {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
-    let icon = fixture
+    let legacy_icon = fixture
         .get("/static/shop/products/milk-tea.png", None)
         .await;
-    assert_eq!(icon.status(), StatusCode::OK);
-    assert_eq!(icon.headers()[header::CONTENT_TYPE], "image/png");
-    assert_eq!(icon.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
-    assert_eq!(
-        icon.headers()[header::CACHE_CONTROL],
-        "public, max-age=86400"
-    );
+    assert_eq!(legacy_icon.status(), StatusCode::NOT_FOUND);
     let unsafe_icon = fixture
         .get("/static/shop/products/../milk-tea.png", None)
         .await;
@@ -1169,7 +1163,40 @@ async fn player_rejects_unknown_or_disabled_products_and_serves_safe_icons() {
 }
 
 #[tokio::test]
-async fn disabled_shop_hides_pages_but_keeps_historical_icons_available() {
+async fn product_icon_route_requires_database_reference_and_uses_immutable_gif_cache() {
+    let fixture = ShopFixture::new().await;
+    let generated_name = format!("{}.gif", ulid::Ulid::new().to_string().to_lowercase());
+    create_shop_icon(
+        &fixture.temporary.path().join("shop-icons"),
+        &generated_name,
+    );
+
+    // 仅放入存储目录不足以获得访问权限，必须有当前商品或订单快照的数据库引用。
+    let unreferenced = fixture
+        .get(&format!("/static/shop/products/{generated_name}"), None)
+        .await;
+    assert_eq!(unreferenced.status(), StatusCode::NOT_FOUND);
+
+    sqlx::query("UPDATE shop_products SET icon_storage_name = ?, icon_media_type = ? WHERE id = ?")
+        .bind(&generated_name)
+        .bind("image/gif")
+        .bind("milk_tea")
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+    let referenced = fixture
+        .get(&format!("/static/shop/products/{generated_name}"), None)
+        .await;
+    assert_eq!(referenced.status(), StatusCode::OK);
+    assert_eq!(referenced.headers()[header::CONTENT_TYPE], "image/gif");
+    assert_eq!(
+        referenced.headers()[header::CACHE_CONTROL],
+        "public, max-age=31536000, immutable"
+    );
+}
+
+#[tokio::test]
+async fn disabled_shop_hides_pages_and_rejects_legacy_icon_names() {
     let fixture = ShopFixture::new_with_shop_enabled(false).await;
 
     assert_eq!(
@@ -1185,7 +1212,7 @@ async fn disabled_shop_hides_pages_but_keeps_historical_icons_available() {
             .get("/static/shop/products/milk-tea.png", None)
             .await
             .status(),
-        StatusCode::OK
+        StatusCode::NOT_FOUND
     );
 }
 

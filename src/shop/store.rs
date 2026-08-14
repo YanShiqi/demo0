@@ -192,6 +192,32 @@ pub async fn list_enabled_products(pool: &SqlitePool) -> Result<Vec<ProductRow>,
     .await?)
 }
 
+/// 查询公开商品总数；分页边界由数据库真实结果决定，后台变更会立即生效。
+pub async fn count_enabled_products(pool: &SqlitePool) -> Result<i64, AppError> {
+    Ok(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM shop_products WHERE enabled = ?")
+            .bind(true)
+            .fetch_one(pool)
+            .await?,
+    )
+}
+
+/// 按排序和数据库分页读取已上架商品，避免公开页把整个目录加载到内存。
+pub async fn list_enabled_products_page(
+    pool: &SqlitePool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<ProductRow>, AppError> {
+    Ok(sqlx::query_as::<_, ProductRow>(
+        "SELECT id, name, description, icon_storage_name, icon_media_type, price, valid_days, max_active_per_user, total_limit, sold_count, enabled, sort_order, created_by_user_id, updated_by_user_id, created_at, updated_at FROM shop_products WHERE enabled = ? ORDER BY sort_order ASC, id ASC LIMIT ? OFFSET ?",
+    )
+    .bind(true)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?)
+}
+
 /// 管理页读取所有商品，已下架商品也保留在列表中供继续管理。
 pub async fn list_admin_products(pool: &SqlitePool) -> Result<Vec<ProductRow>, AppError> {
     Ok(sqlx::query_as::<_, ProductRow>(
@@ -440,6 +466,19 @@ pub async fn product_icon_is_referenced(
     .fetch_one(pool)
     .await?
         != 0)
+}
+
+/// 返回当前商品对图标的可信媒体类型；历史订单只有文件快照，媒体类型由 canonical 扩展名推断。
+pub async fn product_icon_media_type(
+    pool: &SqlitePool,
+    icon_storage_name: &str,
+) -> Result<Option<String>, AppError> {
+    Ok(sqlx::query_scalar::<_, String>(
+        "SELECT icon_media_type FROM shop_products WHERE icon_storage_name = ? LIMIT 1",
+    )
+    .bind(icon_storage_name)
+    .fetch_optional(pool)
+    .await?)
 }
 
 /// 写入商品管理审计；商品 ID 不建外键，以保证永久删除后的历史仍可查询。

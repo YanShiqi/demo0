@@ -423,6 +423,7 @@ pub struct ShopProductView {
     pub price: i64,
     pub valid_days_label: String,
     pub max_active_per_user: i64,
+    pub stock_label: String,
     pub purchase_key: String,
     pub can_purchase: bool,
     pub disabled_reason: String,

@@ -12,7 +12,7 @@ use crate::{
     app::AppState,
     auth,
     error::AppError,
-    shop::{self, catalog, store},
+    shop::{self, store},
     time_display,
 };
 
@@ -781,18 +781,15 @@ pub async fn shop_page(
         Some(user) => store::active_counts_for_user(&state.pool, &user.id, &now_string()?).await?,
         None => Default::default(),
     };
-    let database_products = store::list_enabled_products(&state.pool).await?;
+    let total_items = store::count_enabled_products(&state.pool).await?;
+    let total_pages = page_count(total_items, state.config.shop.page_size)?;
+    let current_page = query.page.unwrap_or(1).clamp(1, total_pages);
+    let offset = (current_page - 1) * state.config.shop.page_size;
+    let database_products =
+        store::list_enabled_products_page(&state.pool, state.config.shop.page_size, offset).await?;
     let products: Vec<ShopProductView> = database_products
         .iter()
         .map(|product| shop_product_view(product, user.as_ref(), &active_counts))
-        .collect();
-    let total_pages = page_count(products.len(), state.config.shop.page_size)?;
-    let current_page = query.page.unwrap_or(1).clamp(1, total_pages);
-    let start = ((current_page - 1) * state.config.shop.page_size) as usize;
-    let products: Vec<ShopProductView> = products
-        .into_iter()
-        .skip(start)
-        .take(state.config.shop.page_size as usize)
         .collect();
     let has_products = !products.is_empty();
     render(
@@ -944,15 +941,22 @@ pub async fn shop_product_icon(
     State(state): State<AppState>,
     Path(file_name): Path<String>,
 ) -> Result<Response, AppError> {
-    // 拒绝时不记录请求中的文件名，避免将攻击性路径写入日志。
-    if catalog::validate_icon_file_name(&file_name).is_err()
-        && !is_generated_icon_file_name(&file_name)
-    {
+    // 只接受服务端生成的 canonical ULID 文件名，避免任意路径和旧上传名成为文件探针。
+    if !is_generated_icon_file_name(&file_name) {
         return Err(AppError::NotFound);
     }
-    let media_type = catalog::icon_media_type(&file_name)
-        .or_else(|| generated_icon_media_type(&file_name))
-        .ok_or(AppError::NotFound)?;
+    if !store::product_icon_is_referenced(&state.pool, &file_name).await? {
+        return Err(AppError::NotFound);
+    }
+    let extension_media_type = generated_icon_media_type(&file_name).ok_or(AppError::NotFound)?;
+    let media_type = match store::product_icon_media_type(&state.pool, &file_name).await? {
+        Some(product_media_type) if product_media_type == extension_media_type => {
+            product_media_type
+        }
+        Some(_) => return Err(AppError::NotFound),
+        // 订单只保存购买时的文件名；canonical 扩展名是其可信媒体类型。
+        None => extension_media_type.to_owned(),
+    };
     let bytes = match tokio::fs::read(state.config.shop.icon_dir.join(&file_name)).await {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -960,7 +964,7 @@ pub async fn shop_product_icon(
         }
         Err(error) => return Err(error.into()),
     };
-    binary_response(bytes, media_type, "public, max-age=86400")
+    binary_response(bytes, &media_type, "public, max-age=31536000, immutable")
 }
 
 fn is_generated_icon_file_name(file_name: &str) -> bool {
@@ -1015,6 +1019,17 @@ fn shop_product_view(
         Some(user) if user.currency_balance < product.price => "余额不足".to_owned(),
         Some(_) => String::new(),
     };
+    let stock_label = product
+        .total_limit
+        .map(|limit| {
+            let remaining = (limit - product.sold_count).max(0);
+            if remaining == 0 {
+                "库存：已售罄".to_owned()
+            } else {
+                format!("库存：剩余 {remaining} 件")
+            }
+        })
+        .unwrap_or_else(|| "库存：不限量".to_owned());
     ShopProductView {
         id: product.id.clone(),
         name: product.name.clone(),
@@ -1026,6 +1041,7 @@ fn shop_product_view(
             .map(|days| format!("购买后 {days} 天内有效"))
             .unwrap_or_else(|| "长期有效".to_owned()),
         max_active_per_user: product.max_active_per_user,
+        stock_label,
         purchase_key: Ulid::new().to_string(),
         can_purchase: disabled_reason.is_empty(),
         disabled_reason,
@@ -1101,11 +1117,11 @@ fn now_string() -> Result<String, AppError> {
         .map_err(|_| AppError::Internal("无法格式化当前时间".to_owned()))
 }
 
-fn page_count(total_items: usize, page_size: i64) -> Result<i64, AppError> {
+fn page_count(total_items: i64, page_size: i64) -> Result<i64, AppError> {
     if page_size < 1 {
         return Err(AppError::Internal("商城分页大小必须大于 0".to_owned()));
     }
-    Ok(((total_items as i64).max(1) + page_size - 1) / page_size)
+    Ok((total_items.max(1) + page_size - 1) / page_size)
 }
 
 #[cfg(test)]
