@@ -132,6 +132,7 @@ pub fn build(pool: SqlitePool, config: Config) -> Router {
             axum::routing::post(web::create_novel_chapter_comment),
         )
         .route("/admin/memes", get(web::admin_memes))
+        .route("/admin/memes/{id}/preview", get(web::admin_meme_preview))
         .route("/admin/currency", get(web::admin_currency))
         .route(
             "/admin/currency/grant",

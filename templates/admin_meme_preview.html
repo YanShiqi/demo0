@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}预览 Meme · 牢笼{% endblock %}
+{% block content %}
+<section class="section-heading">
+  <div>
+    <p class="eyebrow">MEME REVIEW PREVIEW</p>
+    <h1>{{ meme.title }}</h1>
+  </div>
+  <a href="{{ return_href }}">返回审核列表</a>
+</section>
+
+<article class="panel meme-detail">
+  <img class="meme-detail-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
+  <div class="meme-detail-meta">
+    <a class="message-author" href="/u/{{ meme.username }}">
+      <img class="avatar" src="/users/{{ meme.author_user_id }}/avatar" alt="{{ meme.nickname }} 的头像">
+      <span><strong>{{ meme.nickname }}</strong><small>@{{ meme.username }} · {{ meme.created_at }}</small></span>
+    </a>
+    {% if meme.has_tags %}
+    <div class="tag-list">
+      {% for tag in meme.tags %}<span>#{{ tag }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    <p class="muted">{{ meme.status_label }}</p>
+  </div>
+</article>
+
+<nav class="meme-detail-actions" aria-label="Meme 审核操作">
+  {% if meme.is_pending %}
+  <form action="/admin/memes/{{ meme.id }}/approve" method="post">
+    <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+    <button class="button" type="submit">通过</button>
+  </form>
+  {% endif %}
+  <form action="/admin/memes/{{ meme.id }}/delete" method="post">
+    <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
+    <input type="hidden" name="return_to" value="{{ return_href }}">
+    <button class="button danger" type="submit">删除</button>
+  </form>
+  <a class="button secondary" href="{{ return_href }}">返回</a>
+</nav>
+{% endblock %}

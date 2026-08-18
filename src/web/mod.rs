@@ -31,13 +31,13 @@ use crate::{
     updates::UpdateEntry,
 };
 use views::{
-    AdminCurrencyTemplate, AdminMemesTemplate, AdminNovelsTemplate, AdminUserView,
-    AdminUsersTemplate, CurrencyLogView, CurrencyTemplate, CurrencyUserView, HomeTemplate,
-    LoginTemplate, MemeAdjacentView, MemeDetailTemplate, MemeView, MemesTemplate, MessageView,
-    MessagesTemplate, NewMemeTemplate, NovelChapterCommentView, NovelChapterPreviewView,
-    NovelChapterTemplate, NovelChapterView, NovelDetailTemplate, NovelView, NovelsTemplate,
-    PasswordChangeRequiredTemplate, PopularTagView, ProfileTemplate, PublicProfileTemplate,
-    RecentCurrencyLogView, RegisterTemplate, UpdateView, UpdatesTemplate,
+    AdminCurrencyTemplate, AdminMemePreviewTemplate, AdminMemesTemplate, AdminNovelsTemplate,
+    AdminUserView, AdminUsersTemplate, CurrencyLogView, CurrencyTemplate, CurrencyUserView,
+    HomeTemplate, LoginTemplate, MemeAdjacentView, MemeDetailTemplate, MemeView, MemesTemplate,
+    MessageView, MessagesTemplate, NewMemeTemplate, NovelChapterCommentView,
+    NovelChapterPreviewView, NovelChapterTemplate, NovelChapterView, NovelDetailTemplate,
+    NovelView, NovelsTemplate, PasswordChangeRequiredTemplate, PopularTagView, ProfileTemplate,
+    PublicProfileTemplate, RecentCurrencyLogView, RegisterTemplate, UpdateView, UpdatesTemplate,
 };
 
 pub use shop::{
@@ -923,6 +923,26 @@ pub async fn admin_memes(
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty()),
             return_to: admin_memes_return_to(status_filter, query.q.as_deref()),
+        },
+        StatusCode::OK,
+        None,
+    )
+}
+
+/// 管理员预览待审核 Meme 的完整图片；页面本身和图片接口都会再次校验管理员权限。
+pub async fn admin_meme_preview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(meme_id): Path<String>,
+) -> Result<Response, AppError> {
+    let session = auth::require_session(&state.pool, &headers).await?;
+    let actor = require_admin(&state, &session).await?;
+    let meme = memes::get_for_admin(&state.pool, &meme_id).await?;
+    render(
+        AdminMemePreviewTemplate {
+            ctx: page_context_for_user(&state, session.csrf_token, &actor).await?,
+            meme: meme_view(meme, state.config.display.utc_offset_hours),
+            return_href: "/admin/memes".to_owned(),
         },
         StatusCode::OK,
         None,

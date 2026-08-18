@@ -26,7 +26,9 @@
 <section class="meme-grid">
   {% for meme in memes %}
   <article class="meme-card admin-card">
-    <img class="meme-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
+    <a class="meme-thumb-link" href="/admin/memes/{{ meme.id }}/preview" aria-label="查看 {{ meme.title }} 大图">
+      <img class="meme-image" src="/memes/{{ meme.id }}/image" alt="{{ meme.title }}">
+    </a>
     <h2>{{ meme.title }}</h2>
     <p class="muted">{{ meme.status_label }} · {{ meme.nickname }} · {{ meme.created_at }}</p>
     {% if meme.has_tags %}

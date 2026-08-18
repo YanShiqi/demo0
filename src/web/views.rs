@@ -268,6 +268,14 @@ pub struct AdminMemesTemplate {
     pub return_to: String,
 }
 
+#[derive(Template)]
+#[template(path = "admin_meme_preview.html")]
+pub struct AdminMemePreviewTemplate {
+    pub ctx: PageContext,
+    pub meme: MemeView,
+    pub return_href: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct NovelChapterPreviewView {
     pub novel_title: String,

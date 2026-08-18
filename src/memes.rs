@@ -316,6 +316,20 @@ pub async fn get_approved(pool: &SqlitePool, meme_id: &str) -> Result<MemeWithTa
     memes.pop().ok_or(AppError::NotFound)
 }
 
+/// 获取后台预览所需的 Meme；删除记录不允许通过审核预览入口访问。
+pub async fn get_for_admin(pool: &SqlitePool, meme_id: &str) -> Result<MemeWithTags, AppError> {
+    let row = sqlx::query_as::<_, MemeRow>(
+        "SELECT memes.id, memes.author_user_id, memes.storage_name, memes.media_type, memes.title, memes.status, memes.created_at, memes.created_at_epoch, memes.reviewed_at, memes.reviewed_by, users.username, users.nickname FROM memes JOIN users ON users.id = memes.author_user_id WHERE memes.id = ? AND memes.status <> ?",
+    )
+    .bind(meme_id)
+    .bind(STATUS_DELETED)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let mut memes = attach_tags(pool, vec![row]).await?;
+    memes.pop().ok_or(AppError::NotFound)
+}
+
 pub async fn adjacent_approved(
     pool: &SqlitePool,
     current: &MemeRow,

@@ -2460,6 +2460,87 @@ async fn memes_require_review_before_public_listing() {
 }
 
 #[tokio::test]
+async fn admins_can_open_pending_meme_preview_from_review_flow() {
+    let temporary = TempDir::new().unwrap();
+    let database_url = sqlite_url(&temporary.path().join("pending-preview.db"));
+    let pool = db::connect(&database_url).await.unwrap();
+    let author = auth::create_user(
+        &pool,
+        "pending_preview_author",
+        "待审核作者",
+        "correct horse battery",
+        Role::User,
+    )
+    .await
+    .unwrap();
+    let admin = auth::create_user(
+        &pool,
+        "pending_preview_admin",
+        "审核管理员",
+        "correct horse battery",
+        Role::Admin,
+    )
+    .await
+    .unwrap();
+    let meme_id = memes::create(
+        &pool,
+        &author,
+        NewMeme {
+            storage_name: "pending-preview.png".to_owned(),
+            media_type: "image/png".to_owned(),
+            title: "待审核大图预览".to_owned(),
+            tags: vec!["preview".to_owned()],
+        },
+    )
+    .await
+    .unwrap();
+    let router = app::build(pool, test_config(&temporary, database_url));
+    let admin_cookie = sign_in(&router, &admin.username, "127.0.0.1:43401").await;
+    let review_list = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/admin/memes")
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let review_list_html = response_html(review_list).await;
+    assert!(review_list_html.contains(&format!("href=\"/admin/memes/{meme_id}/preview\"")));
+    let preview = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/memes/{meme_id}/preview"))
+                .header(header::COOKIE, &admin_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let preview_html = response_html(preview).await;
+    assert!(preview_html.contains("待审核大图预览"));
+    assert!(preview_html.contains(&format!("/memes/{meme_id}/image")));
+    assert!(preview_html.contains("返回审核列表"));
+
+    let author_cookie = sign_in(&router, &author.username, "127.0.0.1:43402").await;
+    let forbidden = router
+        .oneshot(
+            Request::builder()
+                .uri(format!("/admin/memes/{meme_id}/preview"))
+                .header(header::COOKIE, author_cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn authors_can_delete_their_own_memes_but_not_someone_elses() {
     let temporary = TempDir::new().unwrap();
     let database_path = temporary.path().join("meme-owner-delete.db");
