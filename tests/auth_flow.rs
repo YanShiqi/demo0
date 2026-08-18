@@ -518,6 +518,7 @@ async fn home_check_in_card_awards_currency_and_shows_completed_state() {
     assert!(home_html.contains("每周签到"));
     assert!(home_html.contains("签到领取"));
     assert!(home_html.contains("🪙 1 洲币"));
+    assert!(home_html.contains("class=\"small-button check-in-action-pending\""));
 
     let response = router
         .clone()
@@ -555,6 +556,7 @@ async fn home_check_in_card_awards_currency_and_shows_completed_state() {
     assert!(completed_html.contains("本周已签到"));
     assert!(completed_html.contains("本周签到成功，货币已到账"));
     assert!(!completed_html.contains("action=\"/check-in\""));
+    assert!(!completed_html.contains("check-in-action-pending"));
     let card_start = completed_html
         .find("<aside class=\"check-in-card\"")
         .unwrap();

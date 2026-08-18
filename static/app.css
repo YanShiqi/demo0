@@ -214,6 +214,10 @@ body {
         animation: none;
     }
 
+    .check-in-action-pending {
+        animation: none;
+    }
+
     .voucher-warning {
         animation: none;
     }
@@ -442,6 +446,23 @@ body {
 .check-in-card .small-button {
     padding: 7px 12px;
     font-size: 13px;
+}
+
+.check-in-action-pending {
+    animation: check-in-action-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes check-in-action-pulse {
+    0%,
+    100% {
+        box-shadow: 0 0 0 rgba(255, 152, 127, 0);
+        transform: scale(1);
+    }
+
+    50% {
+        box-shadow: 0 0 18px rgba(255, 152, 127, 0.88);
+        transform: scale(1.06);
+    }
 }
 
 .preview-heading a {

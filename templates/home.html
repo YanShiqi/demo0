@@ -21,7 +21,7 @@
             <small>领取 {{ check_in_currency_symbol }} {{ check_in_reward_amount }} {{ check_in_currency_name }}</small>
             <form action="/check-in" method="post">
               <input type="hidden" name="csrf_token" value="{{ ctx.csrf_token }}">
-              <button class="small-button" type="submit">签到领取</button>
+              <button class="small-button check-in-action-pending" type="submit">签到领取</button>
             </form>
           {% endif %}
           {% if has_check_in_message %}
