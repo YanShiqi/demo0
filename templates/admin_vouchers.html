@@ -13,6 +13,7 @@
     <button class="button" type="submit">查询</button>
   </form>
 </section>
+{% if has_action_message %}<div class="notice success" role="status">{{ action_message }}</div>{% endif %}
 {% if has_not_found %}<p class="empty-state">未找到对应兑换码。</p>{% endif %}
 {% match result %}
 {% when Some with (voucher) %}

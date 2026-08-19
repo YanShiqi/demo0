@@ -38,6 +38,12 @@ pub struct VoucherQuery {
 }
 
 #[derive(Deserialize, Default)]
+pub struct AdminVoucherQuery {
+    notice: Option<String>,
+    voucher_id: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
 pub struct ShopQuery {
     page: Option<i64>,
 }
@@ -59,6 +65,9 @@ pub struct VoucherCancelForm {
     csrf_token: String,
     reason: String,
 }
+
+const VOUCHER_NOTICE_REDEEMED: &str = "redeemed";
+const VOUCHER_NOTICE_CANCELLED: &str = "cancelled";
 
 #[derive(Clone, Default)]
 struct ProductMultipart {
@@ -99,10 +108,23 @@ impl ProductMultipart {
 pub async fn admin_vouchers(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<AdminVoucherQuery>,
 ) -> Result<Response, AppError> {
     let session = auth::require_session(&state.pool, &headers).await?;
     let actor = super::require_super_admin(&state, &session).await?;
-    render_admin_vouchers(&state, &session.csrf_token, &actor, None, false).await
+    let result = match query.voucher_id.as_deref() {
+        Some(voucher_id) => admin_voucher_by_id(&state, voucher_id).await?,
+        None => None,
+    };
+    render_admin_vouchers(
+        &state,
+        &session.csrf_token,
+        &actor,
+        result,
+        query.voucher_id.is_some(),
+        query.notice.as_deref(),
+    )
+    .await
 }
 
 /// 使用一次性查询字段定位凭证，随后仅通过凭证 ID 操作。
@@ -140,7 +162,7 @@ pub async fn lookup_voucher(
         }
         None => None,
     };
-    render_admin_vouchers(&state, &session.csrf_token, &actor, result, true).await
+    render_admin_vouchers(&state, &session.csrf_token, &actor, result, true, None).await
 }
 
 pub async fn redeem_voucher(
@@ -161,7 +183,7 @@ pub async fn redeem_voucher(
         OffsetDateTime::now_utc(),
     )
     .await?;
-    Ok(Redirect::to("/admin/vouchers").into_response())
+    voucher_feedback_redirect(VOUCHER_NOTICE_REDEEMED, &voucher_id)
 }
 
 pub async fn cancel_voucher(
@@ -182,7 +204,7 @@ pub async fn cancel_voucher(
         OffsetDateTime::now_utc(),
     )
     .await?;
-    Ok(Redirect::to("/admin/vouchers").into_response())
+    voucher_feedback_redirect(VOUCHER_NOTICE_CANCELLED, &voucher_id)
 }
 
 /// 超级管理员商品列表；普通管理员也必须被拒绝，避免目录元数据泄露。
@@ -1087,19 +1109,54 @@ fn admin_voucher_view(
     }
 }
 
+async fn admin_voucher_by_id(
+    state: &AppState,
+    voucher_id: &str,
+) -> Result<Option<AdminVoucherView>, AppError> {
+    let voucher = store::find_voucher_with_order_by_id(&state.pool, voucher_id).await?;
+    let Some(voucher) = voucher else {
+        return Ok(None);
+    };
+    let buyer = auth::find_user_by_id(&state.pool, &voucher.order.user_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(Some(admin_voucher_view(
+        voucher,
+        buyer.nickname,
+        buyer.username,
+        OffsetDateTime::now_utc(),
+        state.config.display.utc_offset_hours,
+    )))
+}
+
+// 只允许 ULID 进入重定向地址，避免路径参数被原样拼进查询字符串。
+fn voucher_feedback_redirect(notice: &str, voucher_id: &str) -> Result<Response, AppError> {
+    let voucher_id = Ulid::from_string(voucher_id).map_err(|_| AppError::NotFound)?;
+    let location = format!("/admin/vouchers?notice={notice}&voucher_id={voucher_id}");
+    Ok(Redirect::to(&location).into_response())
+}
+
 async fn render_admin_vouchers(
     state: &AppState,
     csrf_token: &str,
     actor: &crate::model::User,
     result: Option<AdminVoucherView>,
     lookup_performed: bool,
+    notice: Option<&str>,
 ) -> Result<Response, AppError> {
     let has_result = result.is_some();
+    let action_message = match notice {
+        Some(VOUCHER_NOTICE_REDEEMED) => "Token 核销成功，状态已更新为“已兑换”。",
+        Some(VOUCHER_NOTICE_CANCELLED) => "Token 已取消，状态已更新为“已取消”。",
+        _ => "",
+    };
     let mut response = render(
         AdminVouchersTemplate {
             ctx: page_context_for_user(state, csrf_token.to_owned(), actor).await?,
             result,
             has_not_found: lookup_performed && !has_result,
+            has_action_message: !action_message.is_empty(),
+            action_message: action_message.to_owned(),
             note_max_length: state.config.shop.admin_note_max_length,
         },
         StatusCode::OK,

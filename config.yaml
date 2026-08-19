@@ -1,0 +1,49 @@
+# 配置名称，用于在 Continue 的配置选择器中识别该配置。
+name: GLM and DeepSeek Config
+# 配置版本，修改配置结构时可递增。
+version: 0.0.1
+# Continue YAML 配置规范版本，目前使用 v1。
+schema: v1
+
+models:
+  # GLM-5.2：用于聊天、代码编辑和应用修改。
+  - name: GLM-5.2
+    # 第三方服务兼容 OpenAI API，因此使用 openai 提供方。
+    provider: openai
+    # 模型 ID 必须与第三方平台模型列表完全一致。
+    model: glm-5.2
+    # API 基础地址只写到 /v1，不包含具体接口路径。
+    apiBase: https://cf.api.fan/v1
+    # 从 .continue/.env 读取密钥，避免在 YAML 中保存明文。
+    apiKey: ${{ secrets.API_FAN_API_KEY }}
+    # 第三方接口通常使用 /chat/completions，关闭 Responses API。
+    useResponsesApi: false
+    # 指定该模型在 Continue 中承担的功能。
+    roles:
+      - chat
+      - edit
+      - apply
+    # 启用 Agent 模式所需的工具调用能力。
+    capabilities:
+      - tool_use
+
+  # DeepSeek V4 Pro：与 GLM 共用 API 地址和密钥。
+  - name: DeepSeek V4 Pro
+    # 第三方服务兼容 OpenAI API，因此使用 openai 提供方。
+    provider: openai
+    # 若平台控制台显示不同 ID，请仅修改此处。
+    model: deepseek-v4-pro
+    # API 基础地址只写到 /v1，不包含具体接口路径。
+    apiBase: https://cf.api.fan/v1
+    # 与 GLM 共用 .continue/.env 中的同一个密钥。
+    apiKey: ${{ secrets.API_FAN_API_KEY }}
+    # 第三方接口通常使用 /chat/completions，关闭 Responses API。
+    useResponsesApi: false
+    # 指定该模型在 Continue 中承担的功能。
+    roles:
+      - chat
+      - edit
+      - apply
+    # 启用 Agent 模式所需的工具调用能力。
+    capabilities:
+      - tool_use

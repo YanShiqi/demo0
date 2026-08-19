@@ -552,5 +552,7 @@ pub struct AdminVouchersTemplate {
     pub ctx: PageContext,
     pub result: Option<AdminVoucherView>,
     pub has_not_found: bool,
+    pub action_message: String,
+    pub has_action_message: bool,
     pub note_max_length: usize,
 }

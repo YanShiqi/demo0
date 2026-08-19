@@ -1618,6 +1618,18 @@ async fn admin_voucher_redeem_requires_bounded_note_and_only_succeeds_once() {
         )
         .await;
     assert_eq!(redeemed.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        redeemed.headers()[header::LOCATION],
+        format!("/admin/vouchers?notice=redeemed&voucher_id={voucher_id}")
+    );
+    let feedback_html = fixture
+        .get_html(
+            &format!("/admin/vouchers?notice=redeemed&voucher_id={voucher_id}"),
+            &super_cookie,
+        )
+        .await;
+    assert!(feedback_html.contains("Token 核销成功，状态已更新为“已兑换”"));
+    assert!(feedback_html.contains("<strong>已兑换</strong>"));
     let repeated = fixture
         .post(
             &format!("/admin/vouchers/{voucher_id}/redeem"),
@@ -1626,6 +1638,7 @@ async fn admin_voucher_redeem_requires_bounded_note_and_only_succeeds_once() {
         )
         .await;
     assert_eq!(repeated.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response_html(repeated).await, "兑换码当前不可流转");
     assert_eq!(
         voucher_status(&fixture.pool, &voucher_id).await,
         store::STATUS_REDEEMED
@@ -1652,6 +1665,18 @@ async fn admin_voucher_cancel_succeeds_once_and_expired_or_final_vouchers_reject
         )
         .await;
     assert_eq!(cancelled.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        cancelled.headers()[header::LOCATION],
+        format!("/admin/vouchers?notice=cancelled&voucher_id={cancellable_id}")
+    );
+    let cancel_feedback_html = fixture
+        .get_html(
+            &format!("/admin/vouchers?notice=cancelled&voucher_id={cancellable_id}"),
+            &super_cookie,
+        )
+        .await;
+    assert!(cancel_feedback_html.contains("Token 已取消，状态已更新为“已取消”"));
+    assert!(cancel_feedback_html.contains("<strong>已取消</strong>"));
     assert_eq!(
         voucher_status(&fixture.pool, &cancellable_id).await,
         store::STATUS_CANCELLED
